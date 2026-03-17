@@ -278,96 +278,133 @@ export interface QuickLogResult {
   weight: number;
   sets: number;
   reps: number;
-  warmUp: boolean;
 }
 
-/**
- * Parse flexible natural language set logging.
- *
- * Supported formats:
- *   "bench 80 8"           → 1 set, 80kg, 8 reps
- *   "bench 80kg 8 reps"    → same
- *   "bench 80 for 8"       → same
- *   "bench 80 4x8"         → 4 sets, 80kg, 8 reps
- *   "warm up bench 60 10"  → 1 warm-up set, 60kg, 10 reps
- *   "wu bench 60 10"       → same
- *   "w bench 60 10"        → same
- */
-export function parseQuickLog(text: string): QuickLogResult | null {
-  let raw = text.trim().toLowerCase();
-  if (!raw) return null;
-
-  // ── Detect and strip warm-up prefix ──────────────────────────────────────
-  let warmUp = false;
-  const warmUpPrefixes = ['warm up ', 'warmup ', 'warm-up ', 'wu ', 'w/u '];
-  for (const prefix of warmUpPrefixes) {
-    if (raw.startsWith(prefix)) {
-      warmUp = true;
-      raw = raw.slice(prefix.length).trim();
-      break;
-    }
-  }
-  // Single "w " prefix — only treat as warm-up if followed by an exercise word
-  if (!warmUp && raw.startsWith('w ')) {
-    warmUp = true;
-    raw = raw.slice(2).trim();
-  }
-
-  // ── Strip filler words ────────────────────────────────────────────────────
-  // "bench 80 for 8 reps" → remove "for" and "reps"
-  raw = raw.replace(/\bfor\b/g, '').replace(/\breps?\b/g, '').replace(/\bkg\b/g, '').replace(/\s+/g, ' ').trim();
-
-  const parts = raw.split(/\s+/);
-  if (parts.length < 2) return null;
-
-  // ── Try NxN multi-set format first ────────────────────────────────────────
-  // e.g. "bench 80 4x8"
-  const lastPart = parts[parts.length - 1];
-  const sxrMatch = lastPart.match(/^(\d+)x(\d+)$/);
-  if (sxrMatch) {
-    const sets = parseInt(sxrMatch[1]);
-    const reps = parseInt(sxrMatch[2]);
-    if (sets <= 0 || sets > 20 || reps <= 0 || reps > 100) return null;
-
-    const weightStr = parts[parts.length - 2];
-    const weight = parseFloat(weightStr);
-    if (isNaN(weight) || weight < 0 || weight > 1000) return null;
-
-    const exerciseInput = parts.slice(0, parts.length - 2).join(' ').trim();
-    if (!exerciseInput) return null;
-    const exerciseName = resolveExerciseName(exerciseInput);
-    if (!exerciseName) return null;
-
-    return { exerciseName, weight, sets, reps, warmUp };
-  }
-
-  // ── Single-set format: exercise weight reps ───────────────────────────────
-  // Last token is reps, second-to-last is weight, rest is exercise
-  if (parts.length >= 3) {
-    const reps = parseInt(parts[parts.length - 1]);
-    const weight = parseFloat(parts[parts.length - 2]);
-
-    if (!isNaN(reps) && reps > 0 && reps <= 100 && !isNaN(weight) && weight >= 0 && weight <= 1000) {
-      const exerciseInput = parts.slice(0, parts.length - 2).join(' ').trim();
-      if (exerciseInput) {
-        const exerciseName = resolveExerciseName(exerciseInput);
-        if (exerciseName) return { exerciseName, weight, sets: 1, reps, warmUp };
+/** Find the best (longest) matching exercise alias anywhere in lowercased text. */
+function findExerciseInText(lower: string): { name: string; key: string } | null {
+  let best: { name: string; key: string; len: number } | null = null;
+  for (const [key, name] of Object.entries(EXERCISE_ALIASES)) {
+    if (lower.includes(key)) {
+      if (!best || key.length > best.len) {
+        best = { name, key, len: key.length };
       }
     }
   }
-
-  return null;
+  return best ? { name: best.name, key: best.key } : null;
 }
 
-function resolveExerciseName(input: string): string | null {
-  const lower = input.toLowerCase().trim();
-  if (EXERCISE_ALIASES[lower]) return EXERCISE_ALIASES[lower];
+/** Parse one segment of text into a single log entry. */
+function parseSingleEntry(text: string, fallbackExercise: string | null = null): QuickLogResult | null {
+  const lower = text.trim().toLowerCase();
+  if (!lower) return null;
 
-  // Partial key contains input or vice versa
-  for (const [key, name] of Object.entries(EXERCISE_ALIASES)) {
-    if (lower === key) return name;
-    if (lower.includes(key) || key.includes(lower)) return name;
+  let working = lower;
+  let taggedWeight: number | null = null;
+  let taggedReps: number | null = null;
+  let sets = 1;
+
+  // 1. NxN multi-set: "4x8" or "4×8"
+  const sxrMatch = working.match(/\b(\d+)\s*[x×]\s*(\d+)\b/);
+  if (sxrMatch) {
+    sets = parseInt(sxrMatch[1], 10);
+    taggedReps = parseInt(sxrMatch[2], 10);
+    working = working.replace(sxrMatch[0], ' ');
   }
 
-  return null;
+  // 2. Explicit kg weight: "80kg" or "80 kg"
+  const kgMatch = working.match(/\b(\d+(?:\.\d+)?)\s*kg\b/i);
+  if (kgMatch) {
+    taggedWeight = parseFloat(kgMatch[1]);
+    working = working.replace(kgMatch[0], ' ');
+  }
+
+  // 3. Explicit reps: "8 reps" or "for 8"
+  if (!taggedReps) {
+    const repsMatch =
+      working.match(/\b(\d+)\s*reps?\b/i) ||
+      working.match(/\bfor\s+(\d+)\b/i);
+    if (repsMatch) {
+      taggedReps = parseInt(repsMatch[1], 10);
+      working = working.replace(repsMatch[0], ' ');
+    }
+  }
+
+  // 4. Find exercise (search original text for best alias match)
+  const exercise =
+    findExerciseInText(lower) ??
+    (fallbackExercise ? { name: fallbackExercise, key: '' } : null);
+  if (!exercise) return null;
+
+  // Remove exercise key from working text
+  if (exercise.key) {
+    const escaped = exercise.key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    working = working.replace(new RegExp(escaped, 'gi'), ' ');
+  }
+
+  // 5. Extract remaining numbers
+  const nums = [...working.matchAll(/\d+(?:\.\d+)?/g)].map((m) => parseFloat(m[0]));
+
+  // 6. Assign weight and reps
+  let weight = taggedWeight;
+  let reps = taggedReps;
+
+  if (weight === null && reps === null) {
+    if (nums.length >= 2) {
+      const [a, b] = [nums[0], nums[1]];
+      // Heuristic: reps ≤ 30, weight > 30 (or just use position order)
+      if (a > 30 && b <= 30) { weight = a; reps = b; }
+      else if (b > 30 && a <= 30) { weight = b; reps = a; }
+      else { weight = a; reps = b; }
+    } else {
+      return null;
+    }
+  } else if (weight === null && nums.length >= 1) {
+    weight = nums[0];
+  } else if (reps === null && nums.length >= 1) {
+    reps = nums[0];
+  }
+
+  if (weight === null || reps === null) return null;
+  if (weight < 0 || weight > 1000) return null;
+  if (reps <= 0 || reps > 100) return null;
+  if (sets <= 0 || sets > 20) return null;
+
+  return { exerciseName: exercise.name, weight, sets, reps };
+}
+
+/** Split a multi-entry message into individual segments on ", then" / "then" / ";" */
+function splitEntries(text: string): string[] {
+  return text
+    .split(/,\s*then\s+|\s+then\s+|;\s*/i)
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
+/**
+ * Parse natural language workout log text into one or more set entries.
+ *
+ * Accepted formats (examples):
+ *   "bench 80 8"                          → Bench Press, 80kg, 1×8
+ *   "bench 80 4x8"                        → Bench Press, 80kg, 4×8
+ *   "bench 50kg 6 reps"                   → Bench Press, 50kg, 1×6
+ *   "i did bench 50kg for 6 reps"         → Bench Press, 50kg, 1×6
+ *   "50kg bench 6"                        → Bench Press, 50kg, 1×6
+ *   "bench press 80 8"                    → Bench Press, 80kg, 1×8
+ *   "did 6 reps of bench at 50kg"         → Bench Press, 50kg, 1×6
+ *   "bench 50kg 6, then 50kg 4, then 45kg 5" → three sets of Bench Press
+ */
+export function parseQuickLog(text: string): QuickLogResult[] | null {
+  const entries = splitEntries(text.trim());
+  const results: QuickLogResult[] = [];
+  let lastExercise: string | null = null;
+
+  for (const entry of entries) {
+    const parsed = parseSingleEntry(entry, lastExercise);
+    if (parsed) {
+      results.push(parsed);
+      lastExercise = parsed.exerciseName;
+    }
+  }
+
+  return results.length > 0 ? results : null;
 }

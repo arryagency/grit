@@ -14,7 +14,7 @@ import {
   Animated,
   Easing,
 } from 'react-native';
-import { useState, useCallback, useRef } from 'react';
+import { useState, useCallback, useRef, useEffect } from 'react';
 import { useFocusEffect, router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import {
@@ -28,12 +28,20 @@ import {
   getLastSessionForExercise,
 } from '@/utils/storage';
 import { getSuggestion, parseQuickLog } from '@/utils/progressiveOverload';
+import { parseLogWithClaude } from '@/utils/api';
 import { ALL_EXERCISES } from '@/constants/exercises';
 import { COLORS, SPACING, FONT_SIZE, RADIUS } from '@/constants/theme';
 
 function emptySet(weight = 0, reps = 8): SetLog {
   return { weight, reps, completed: false, isPR: false };
 }
+
+const QUICK_PLACEHOLDERS = [
+  'bench 80 8',
+  'squat 100 3x5',
+  'dl 120 5',
+  'i did bench 50kg for 6 reps',
+];
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -76,9 +84,11 @@ export default function WorkoutScreen() {
   // Quick log
   const [quickText, setQuickText] = useState('');
   const [quickError, setQuickError] = useState('');
-  const [quickWarmUp, setQuickWarmUp] = useState(false);
+  const [quickParsing, setQuickParsing] = useState(false);
   // Track last-logged exercise so we can show a running set list
   const [lastLoggedExercise, setLastLoggedExercise] = useState<string | null>(null);
+  // Rotating placeholder text
+  const [placeholderIdx, setPlaceholderIdx] = useState(0);
 
   // Check-in
   const [showCheckIn, setShowCheckIn] = useState(false);
@@ -94,6 +104,14 @@ export default function WorkoutScreen() {
       getSessions().then(setAllSessions);
     }, [])
   );
+
+  useEffect(() => {
+    if (!isActive) return;
+    const timer = setInterval(() => {
+      setPlaceholderIdx((i) => (i + 1) % QUICK_PLACEHOLDERS.length);
+    }, 3000);
+    return () => clearInterval(timer);
+  }, [isActive]);
 
   const filteredExercises = search.trim()
     ? ALL_EXERCISES.filter((e) => e.toLowerCase().includes(search.toLowerCase()))
@@ -214,51 +232,62 @@ export default function WorkoutScreen() {
 
   // ─── Quick Log ──────────────────────────────────────────────────────────────
 
-  function handleQuickLog() {
+  async function handleQuickLog() {
     const text = quickText.trim();
-    if (!text) return;
+    if (!text || quickParsing) return;
 
-    const parsed = parseQuickLog(text);
-    if (!parsed) {
-      setQuickError('e.g. "bench 80 8" or "bench 80 4x8" or "warm up bench 60 10"');
+    // Try local parser first (instant)
+    let results = parseQuickLog(text);
+
+    // Fallback to Claude if local parser can't make sense of it
+    if (!results) {
+      setQuickParsing(true);
+      setQuickError('');
+      const claudeResults = await parseLogWithClaude(text);
+      setQuickParsing(false);
+      if (claudeResults && claudeResults.length > 0) {
+        results = claudeResults;
+      }
+    }
+
+    if (!results) {
+      setQuickError('Try: "bench 80 8" or "i did squat 100kg for 5 reps"');
       return;
     }
 
-    // The W toggle in the bar overrides the parsed warmUp flag
-    const isWarmUp = parsed.warmUp || quickWarmUp;
-
     setQuickError('');
-    setLastLoggedExercise(parsed.exerciseName);
-    setQuickWarmUp(false); // reset toggle after log
-
-    setSession((prev) => {
-      const existingIdx = prev.exercises.findIndex(
-        (e) => e.name.toLowerCase() === parsed.exerciseName.toLowerCase()
-      );
-      const newSets: SetLog[] = Array.from({ length: parsed.sets }, () => ({
-        weight: parsed.weight,
-        reps: parsed.reps,
-        completed: true,
-        isPR: false,
-        warmUp: isWarmUp,
-      }));
-
-      if (existingIdx >= 0) {
-        const exercises = [...prev.exercises];
-        const ex = { ...exercises[existingIdx] };
-        // Drop empty placeholder sets, then append new ones
-        const realSets = ex.sets.filter((s) => s.weight > 0 || s.reps > 0);
-        ex.sets = [...realSets, ...newSets];
-        exercises[existingIdx] = ex;
-        return { ...prev, exercises };
-      } else {
-        return {
-          ...prev,
-          exercises: [...prev.exercises, { name: parsed.exerciseName, sets: newSets }],
-        };
-      }
-    });
     setQuickText('');
+
+    // Log all parsed entries
+    for (const parsed of results) {
+      setLastLoggedExercise(parsed.exerciseName);
+      setSession((prev) => {
+        const existingIdx = prev.exercises.findIndex(
+          (e) => e.name.toLowerCase() === parsed.exerciseName.toLowerCase()
+        );
+        const newSets: SetLog[] = Array.from({ length: parsed.sets }, () => ({
+          weight: parsed.weight,
+          reps: parsed.reps,
+          completed: true,
+          isPR: false,
+        }));
+
+        if (existingIdx >= 0) {
+          const exercises = [...prev.exercises];
+          const ex = { ...exercises[existingIdx] };
+          // Drop empty placeholder sets, then append new ones
+          const realSets = ex.sets.filter((s) => s.weight > 0 || s.reps > 0);
+          ex.sets = [...realSets, ...newSets];
+          exercises[existingIdx] = ex;
+          return { ...prev, exercises };
+        } else {
+          return {
+            ...prev,
+            exercises: [...prev.exercises, { name: parsed.exerciseName, sets: newSets }],
+          };
+        }
+      });
+    }
   }
 
   // ─── Finish / Discard ───────────────────────────────────────────────────────
@@ -456,10 +485,8 @@ export default function WorkoutScreen() {
               <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ flex: 1 }}>
                 <View style={styles.runningLogSets}>
                   {doneSets.map((s, i) => (
-                    <View key={i} style={[styles.runningSetChip, s.warmUp && styles.runningSetChipWarm]}>
-                      <Text style={[styles.runningSetText, s.warmUp && styles.runningSetTextWarm]}>
-                        {s.warmUp ? 'W ' : ''}{s.weight}×{s.reps}
-                      </Text>
+                    <View key={i} style={styles.runningSetChip}>
+                      <Text style={styles.runningSetText}>{s.weight}×{s.reps}</Text>
                     </View>
                   ))}
                 </View>
@@ -470,25 +497,24 @@ export default function WorkoutScreen() {
 
         {/* Quick Log Bar */}
         <View style={styles.quickLogBar}>
-          <TouchableOpacity
-            style={[styles.warmUpToggle, quickWarmUp && styles.warmUpToggleActive]}
-            onPress={() => setQuickWarmUp((v) => !v)}
-          >
-            <Text style={[styles.warmUpToggleText, quickWarmUp && styles.warmUpToggleTextActive]}>W</Text>
-          </TouchableOpacity>
           <TextInput
             style={styles.quickLogInput}
             value={quickText}
             onChangeText={(t) => { setQuickText(t); setQuickError(''); }}
-            placeholder='bench 80 8  ·  squat 100 3x5'
+            placeholder={QUICK_PLACEHOLDERS[placeholderIdx]}
             placeholderTextColor={COLORS.textMuted}
             returnKeyType="done"
             onSubmitEditing={handleQuickLog}
             autoCorrect={false}
             autoCapitalize="none"
+            editable={!quickParsing}
           />
-          <TouchableOpacity style={styles.quickLogSend} onPress={handleQuickLog}>
-            <Ionicons name="flash" size={20} color={COLORS.background} />
+          <TouchableOpacity
+            style={[styles.quickLogSend, quickParsing && { opacity: 0.5 }]}
+            onPress={handleQuickLog}
+            disabled={quickParsing}
+          >
+            <Ionicons name={quickParsing ? 'ellipsis-horizontal' : 'flash'} size={20} color={COLORS.background} />
           </TouchableOpacity>
           {quickError ? <Text style={styles.quickLogError}>{quickError}</Text> : null}
         </View>
@@ -672,7 +698,6 @@ function SetRow({
     <View style={[setStyles.row, set.completed && setStyles.rowCompleted]}>
       <View style={setStyles.setNumWrap}>
         <Text style={setStyles.setNum}>{setNum}</Text>
-        {set.warmUp && <Text style={setStyles.warmBadge}>W</Text>}
       </View>
       <View style={setStyles.counterGroup}>
         <TouchableOpacity style={setStyles.adjBtn} onPress={() => onWeightDelta(-1)}>
@@ -967,18 +992,10 @@ const styles = StyleSheet.create({
     paddingHorizontal: SPACING.sm,
     paddingVertical: 3,
   },
-  runningSetChipWarm: {
-    backgroundColor: 'rgba(255,136,0,0.12)',
-    borderWidth: 1,
-    borderColor: 'rgba(255,136,0,0.3)',
-  },
   runningSetText: {
     fontSize: FONT_SIZE.xs,
     color: COLORS.text,
     fontWeight: '600',
-  },
-  runningSetTextWarm: {
-    color: COLORS.warning,
   },
   // Quick Log Bar
   quickLogBar: {
@@ -990,28 +1007,6 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: SPACING.xs,
-  },
-  warmUpToggle: {
-    width: 36,
-    height: 40,
-    borderRadius: RADIUS.sm,
-    borderWidth: 1,
-    borderColor: COLORS.border,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: COLORS.surfaceAlt,
-  },
-  warmUpToggleActive: {
-    backgroundColor: 'rgba(255,136,0,0.15)',
-    borderColor: COLORS.warning,
-  },
-  warmUpToggleText: {
-    fontSize: FONT_SIZE.sm,
-    fontWeight: '800',
-    color: COLORS.textMuted,
-  },
-  warmUpToggleTextActive: {
-    color: COLORS.warning,
   },
   quickLogInput: {
     flex: 1,
@@ -1115,7 +1110,6 @@ const setStyles = StyleSheet.create({
   rowCompleted: { opacity: 0.55 },
   setNumWrap: { width: 28, alignItems: 'center', gap: 2 },
   setNum: { fontSize: FONT_SIZE.sm, fontWeight: '700', color: COLORS.textMuted, textAlign: 'center' },
-  warmBadge: { fontSize: 9, fontWeight: '800', color: COLORS.warning, letterSpacing: 0.5 },
   counterGroup: {
     flex: 1,
     flexDirection: 'row',

@@ -62,6 +62,30 @@ export async function streamChat(
   }
 }
 
+export interface ParsedLogEntry {
+  exerciseName: string;
+  weight: number;
+  reps: number;
+  sets: number;
+}
+
+/** Ask the backend Claude to parse free-form workout text. Returns null on any failure. */
+export async function parseLogWithClaude(text: string): Promise<ParsedLogEntry[] | null> {
+  try {
+    const response = await fetch(`${BASE_URL}/api/parse-log`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text }),
+      signal: AbortSignal.timeout(5000),
+    });
+    if (!response.ok) return null;
+    const data = await response.json();
+    return Array.isArray(data.results) && data.results.length > 0 ? data.results : null;
+  } catch {
+    return null;
+  }
+}
+
 export async function healthCheck(): Promise<boolean> {
   try {
     const response = await fetch(`${BASE_URL}/health`, { signal: AbortSignal.timeout(3000) });

@@ -79,6 +79,41 @@ app.post('/api/chat', async (req, res) => {
   }
 });
 
+// POST /api/parse-log — Claude fallback for natural-language set parsing
+app.post('/api/parse-log', async (req, res) => {
+  const { text } = req.body;
+  if (!text || typeof text !== 'string') {
+    return res.status(400).json({ error: 'text is required' });
+  }
+
+  try {
+    const response = await anthropic.messages.create({
+      model: 'claude-haiku-4-5-20251001',
+      max_tokens: 256,
+      system: `You parse workout log text into structured JSON. Return ONLY a valid JSON array, no explanation, no markdown.
+
+Extract exercise name, weight in kg, reps, and sets. Use these exact exercise names:
+Bench Press, Barbell Back Squat, Conventional Deadlift, Romanian Deadlift, Overhead Press,
+Barbell Row, Pull-Up, Chin-Up, Incline Bench Press, Decline Bench Press, Push Press, Dips,
+Hip Thrust, Bulgarian Split Squat, Leg Press, Hack Squat, Bicep Curl, Hammer Curl,
+Preacher Curl, Tricep Pushdown, Skull Crusher, Lateral Raise, Lat Pulldown, Seated Cable Row,
+Face Pull, Leg Curl, Leg Extension, Calf Raise, Shrug, Arnold Press, Sumo Deadlift
+
+Output format: [{"exerciseName":"...","weight":0,"reps":0,"sets":1}]
+If text contains multiple sets (e.g. "then"), return multiple objects.
+If you cannot determine weight or reps, return [].`,
+      messages: [{ role: 'user', content: text }],
+    });
+
+    const raw = response.content[0].text.trim();
+    const parsed = JSON.parse(raw);
+    res.json({ results: Array.isArray(parsed) ? parsed : [] });
+  } catch (err) {
+    console.error('parse-log error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Health check
 app.get('/health', (_req, res) => res.json({ status: 'ok', service: 'GRIT' }));
 

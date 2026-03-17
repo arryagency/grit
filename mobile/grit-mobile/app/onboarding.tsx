@@ -10,7 +10,7 @@ import {
   Platform,
   SafeAreaView,
 } from 'react-native';
-import { useState, useRef, useCallback } from 'react';
+import { useState, useRef, useCallback, useEffect, memo } from 'react';
 import { router } from 'expo-router';
 import { saveProfile, UserProfile } from '@/utils/storage';
 import { scheduleWorkoutNotifications } from '@/utils/notifications';
@@ -296,28 +296,95 @@ export default function OnboardingScreen() {
 
 // ─── Gym Time Picker Component ────────────────────────────────────────────────
 
-function GymTimePicker({ value, onChange }: { value: string; onChange: (v: string) => void }) {
-  const listRef = useRef<FlatList>(null);
-  const selectedIdx = TIME_OPTIONS.findIndex((t) => t.value === value);
+/** Individual row — memoized so only the 2 items that change selection actually re-render. */
+const TimePickerItem = memo(function TimePickerItem({
+  label,
+  isSelected,
+  onSelect,
+  index,
+  value,
+}: {
+  label: string;
+  isSelected: boolean;
+  onSelect: (v: string, idx: number) => void;
+  index: number;
+  value: string;
+}) {
+  return (
+    <TouchableOpacity
+      style={pickerStyles.item}
+      onPress={() => onSelect(value, index)}
+      activeOpacity={0.7}
+    >
+      <Text style={[pickerStyles.itemText, isSelected && pickerStyles.itemTextSelected]}>
+        {label}
+      </Text>
+    </TouchableOpacity>
+  );
+});
 
-  const scrollToIndex = useCallback((idx: number, animated = true) => {
-    if (idx >= 0) {
-      listRef.current?.scrollToIndex({ index: idx, animated, viewPosition: 0.5 });
+/** Wrap in memo so parent re-renders (from other state changes) don't propagate in. */
+const GymTimePicker = memo(function GymTimePicker({
+  value,
+  onChange,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+}) {
+  const listRef = useRef<FlatList>(null);
+  // Track selection locally for instant visual feedback — don't wait for parent re-render
+  const [localSelected, setLocalSelected] = useState(
+    () => value || TIME_OPTIONS[12].value
+  );
+  // Keep onChange stable across renders without adding it as a dep
+  const onChangeRef = useRef(onChange);
+  onChangeRef.current = onChange;
+
+  // Sync when parent externally clears the value (Clear button)
+  useEffect(() => {
+    if (!value && localSelected !== TIME_OPTIONS[12].value) {
+      setLocalSelected(TIME_OPTIONS[12].value);
+      listRef.current?.scrollToIndex({ index: 12, animated: false, viewPosition: 0.5 });
     }
+  }, [value]);
+
+  const handleSelect = useCallback((v: string, idx: number) => {
+    setLocalSelected(v);
+    onChangeRef.current(v);
+    listRef.current?.scrollToIndex({ index: idx, animated: true, viewPosition: 0.5 });
   }, []);
 
-  function onMomentumScrollEnd(e: any) {
-    const offset = e.nativeEvent.contentOffset.y;
-    const idx = Math.round(offset / TIME_ITEM_H);
-    const clamped = Math.max(0, Math.min(idx, TIME_OPTIONS.length - 1));
-    onChange(TIME_OPTIONS[clamped].value);
-  }
+  const onMomentumScrollEnd = useCallback((e: any) => {
+    const idx = Math.max(
+      0,
+      Math.min(
+        Math.round(e.nativeEvent.contentOffset.y / TIME_ITEM_H),
+        TIME_OPTIONS.length - 1
+      )
+    );
+    const v = TIME_OPTIONS[idx].value;
+    setLocalSelected(v);
+    onChangeRef.current(v);
+  }, []);
+
+  const renderItem = useCallback(
+    ({ item, index }: { item: TimeOption; index: number }) => (
+      <TimePickerItem
+        label={item.label}
+        value={item.value}
+        index={index}
+        isSelected={item.value === localSelected}
+        onSelect={handleSelect}
+      />
+    ),
+    [localSelected, handleSelect]
+  );
+
+  const initialIdx = TIME_OPTIONS.findIndex((t) => t.value === localSelected);
 
   return (
     <View style={pickerStyles.wrapper}>
-      {/* Selection highlight band */}
       <View pointerEvents="none" style={pickerStyles.selectionBand} />
-
       <FlatList
         ref={listRef}
         data={TIME_OPTIONS}
@@ -327,7 +394,7 @@ function GymTimePicker({ value, onChange }: { value: string; onChange: (v: strin
           offset: TIME_ITEM_H * index,
           index,
         })}
-        initialScrollIndex={selectedIdx >= 0 ? selectedIdx : 12} // default ~18:00
+        initialScrollIndex={initialIdx >= 0 ? initialIdx : 12}
         snapToInterval={TIME_ITEM_H}
         decelerationRate="fast"
         showsVerticalScrollIndicator={false}
@@ -336,25 +403,13 @@ function GymTimePicker({ value, onChange }: { value: string; onChange: (v: strin
         contentContainerStyle={{
           paddingVertical: TIME_ITEM_H * Math.floor(PICKER_VISIBLE / 2),
         }}
-        renderItem={({ item, index }) => {
-          const isSelected = item.value === value;
-          return (
-            <TouchableOpacity
-              style={pickerStyles.item}
-              onPress={() => { onChange(item.value); scrollToIndex(index); }}
-              activeOpacity={0.7}
-            >
-              <Text style={[pickerStyles.itemText, isSelected && pickerStyles.itemTextSelected]}>
-                {item.label}
-              </Text>
-            </TouchableOpacity>
-          );
-        }}
+        renderItem={renderItem}
+        extraData={localSelected}
         style={{ height: PICKER_H }}
       />
     </View>
   );
-}
+});
 
 const pickerStyles = StyleSheet.create({
   wrapper: {
