@@ -47,6 +47,19 @@
     ],
     "experiments": {
       "typedRoutes": true
+    },
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "f56a2e1e-ce4c-421c-88b5-d502ea472c52"
+      }
+    },
+    "owner": "arryangad",
+    "runtimeVersion": {
+      "policy": "appVersion"
+    },
+    "updates": {
+      "url": "https://u.expo.dev/f56a2e1e-ce4c-421c-88b5-d502ea472c52"
     }
   }
 }
