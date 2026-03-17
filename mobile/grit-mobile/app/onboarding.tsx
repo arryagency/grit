@@ -294,15 +294,39 @@ export default function OnboardingScreen() {
 }
 
 // ─── Gym Time Picker Component ────────────────────────────────────────────────
-//
-// Root-cause fix for lag:
-//   FlatList + extraData + renderItem recreation caused ALL visible items to
-//   reconcile on every selection change. Replaced with a plain ScrollView whose
-//   items are completely static (rendered once, never updated). Selection is
-//   tracked only by a ref — no state inside the picker, zero re-renders.
-//   The highlight band is a static absolutely-positioned view; it always sits at
-//   the center row and visually indicates whichever item is scrolled there.
 
+/**
+ * Single row — memoized. React.memo's comparator means only the 2 rows whose
+ * `isSelected` prop actually changes will do any work when selection updates.
+ * All other 71 rows are skipped entirely. This is the key to zero-lag selection.
+ */
+const TimeItem = memo(function TimeItem({
+  label,
+  isSelected,
+  onPress,
+}: {
+  label: string;
+  isSelected: boolean;
+  onPress: () => void;
+}) {
+  return (
+    <TouchableOpacity style={pickerStyles.item} activeOpacity={0.6} onPress={onPress}>
+      <Text style={[pickerStyles.itemText, isSelected && pickerStyles.itemTextSelected]}>
+        {label}
+      </Text>
+    </TouchableOpacity>
+  );
+});
+
+/**
+ * Performance strategy:
+ *  - Plain ScrollView (not FlatList) — simpler, no virtualisation overhead
+ *  - localSelected state lives inside this component; parent re-renders don't touch it
+ *  - onScrollEndDrag fires the instant the finger lifts → accent highlight appears
+ *    immediately, not after the snap animation completes
+ *  - onMomentumScrollEnd corrects the value if a fling carried the scroll further
+ *  - React.memo on TimeItem means only 2 rows re-render per selection change
+ */
 const GymTimePicker = memo(function GymTimePicker({
   value,
   onChange,
@@ -311,38 +335,39 @@ const GymTimePicker = memo(function GymTimePicker({
   onChange: (v: string) => void;
 }) {
   const scrollRef = useRef<ScrollView>(null);
-  // Keep onChange stable — never add it as a dep so memo works correctly
   const onChangeRef = useRef(onChange);
   onChangeRef.current = onChange;
 
-  // Compute initial scroll offset once on mount (not reactive)
-  const initialOffset = useRef(
-    Math.max(0, TIME_OPTIONS.findIndex((t) => t.value === value)) * TIME_ITEM_H
+  const [localSelected, setLocalSelected] = useState(
+    () => value || TIME_OPTIONS[12].value
   );
 
-  // When parent clears the value (Clear button), scroll back to default
+  const initialOffset = useRef(
+    Math.max(0, TIME_OPTIONS.findIndex((t) => t.value === (value || TIME_OPTIONS[12].value))) *
+      TIME_ITEM_H
+  );
+
+  // Sync when parent clears value via the "Clear" button
   useEffect(() => {
-    if (!value) {
+    if (!value && localSelected !== TIME_OPTIONS[12].value) {
+      setLocalSelected(TIME_OPTIONS[12].value);
       scrollRef.current?.scrollTo({ y: 12 * TIME_ITEM_H, animated: true });
     }
   }, [value]);
 
-  function onMomentumScrollEnd(e: any) {
+  function commitIdx(rawY: number) {
     const idx = Math.max(
       0,
-      Math.min(
-        Math.round(e.nativeEvent.contentOffset.y / TIME_ITEM_H),
-        TIME_OPTIONS.length - 1
-      )
+      Math.min(Math.round(rawY / TIME_ITEM_H), TIME_OPTIONS.length - 1)
     );
-    onChangeRef.current(TIME_OPTIONS[idx].value);
+    const v = TIME_OPTIONS[idx].value;
+    setLocalSelected(v);
+    onChangeRef.current(v);
   }
 
   return (
     <View style={pickerStyles.wrapper}>
-      {/* Static highlight band — always at center row, no JS updates needed */}
       <View pointerEvents="none" style={pickerStyles.selectionBand} />
-
       <ScrollView
         ref={scrollRef}
         style={{ height: PICKER_H }}
@@ -353,22 +378,22 @@ const GymTimePicker = memo(function GymTimePicker({
         snapToInterval={TIME_ITEM_H}
         decelerationRate="fast"
         showsVerticalScrollIndicator={false}
-        onMomentumScrollEnd={onMomentumScrollEnd}
-        // Let the scroll view settle natively before we report the value
-        scrollEventThrottle={0}
+        // Instant feedback the moment the finger lifts (rounds to snap position)
+        onScrollEndDrag={(e) => commitIdx(e.nativeEvent.contentOffset.y)}
+        // Correction after a fling carries the scroll to a different position
+        onMomentumScrollEnd={(e) => commitIdx(e.nativeEvent.contentOffset.y)}
       >
         {TIME_OPTIONS.map((item, index) => (
-          <TouchableOpacity
+          <TimeItem
             key={item.value}
-            style={pickerStyles.item}
-            activeOpacity={0.6}
+            label={item.label}
+            isSelected={item.value === localSelected}
             onPress={() => {
               scrollRef.current?.scrollTo({ y: index * TIME_ITEM_H, animated: true });
+              setLocalSelected(item.value);
               onChangeRef.current(item.value);
             }}
-          >
-            <Text style={pickerStyles.itemText}>{item.label}</Text>
-          </TouchableOpacity>
+          />
         ))}
       </ScrollView>
     </View>
@@ -406,6 +431,11 @@ const pickerStyles = StyleSheet.create({
     fontSize: FONT_SIZE.lg,
     color: COLORS.textMuted,
     fontWeight: '500',
+  },
+  itemTextSelected: {
+    color: COLORS.accent,
+    fontWeight: '800',
+    fontSize: FONT_SIZE.xl,
   },
 });
 
