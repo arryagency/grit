@@ -27,7 +27,7 @@ import {
   generateId,
   getLastSessionForExercise,
 } from '@/utils/storage';
-import { getSuggestion, parseQuickLog } from '@/utils/progressiveOverload';
+import { getSuggestion, parseQuickLog, getMissingPieceQuestion } from '@/utils/progressiveOverload';
 import { parseLogWithClaude } from '@/utils/api';
 import { ALL_EXERCISES } from '@/constants/exercises';
 import { COLORS, SPACING, FONT_SIZE, RADIUS } from '@/constants/theme';
@@ -236,14 +236,14 @@ export default function WorkoutScreen() {
     const text = quickText.trim();
     if (!text || quickParsing) return;
 
-    // Try local parser first (instant)
-    let results = parseQuickLog(text);
+    // Try local parser with session context (last logged exercise as fallback)
+    let results = parseQuickLog(text, lastLoggedExercise);
 
     // Fallback to Claude if local parser can't make sense of it
     if (!results) {
       setQuickParsing(true);
       setQuickError('');
-      const claudeResults = await parseLogWithClaude(text);
+      const claudeResults = await parseLogWithClaude(text, lastLoggedExercise);
       setQuickParsing(false);
       if (claudeResults && claudeResults.length > 0) {
         results = claudeResults;
@@ -251,7 +251,8 @@ export default function WorkoutScreen() {
     }
 
     if (!results) {
-      setQuickError('Try: "bench 80 8" or "i did squat 100kg for 5 reps"');
+      // Never show a generic error — ask for the specific missing piece
+      setQuickError(getMissingPieceQuestion(text, lastLoggedExercise));
       return;
     }
 

@@ -81,10 +81,14 @@ app.post('/api/chat', async (req, res) => {
 
 // POST /api/parse-log — Claude fallback for natural-language set parsing
 app.post('/api/parse-log', async (req, res) => {
-  const { text } = req.body;
+  const { text, contextExercise } = req.body;
   if (!text || typeof text !== 'string') {
     return res.status(400).json({ error: 'text is required' });
   }
+
+  const contextNote = contextExercise
+    ? `\nThe user most recently logged: "${contextExercise}". Use this as the exercise if the text doesn't name one.`
+    : '';
 
   try {
     const response = await anthropic.messages.create({
@@ -92,7 +96,8 @@ app.post('/api/parse-log', async (req, res) => {
       max_tokens: 256,
       system: `You parse workout log text into structured JSON. Return ONLY a valid JSON array, no explanation, no markdown.
 
-Extract exercise name, weight in kg, reps, and sets. Use these exact exercise names:
+Extract exercise name, weight in kg, reps, and sets. Be extremely generous — extract whatever numbers you can.
+Use these exact exercise names:
 Bench Press, Barbell Back Squat, Conventional Deadlift, Romanian Deadlift, Overhead Press,
 Barbell Row, Pull-Up, Chin-Up, Incline Bench Press, Decline Bench Press, Push Press, Dips,
 Hip Thrust, Bulgarian Split Squat, Leg Press, Hack Squat, Bicep Curl, Hammer Curl,
@@ -100,8 +105,8 @@ Preacher Curl, Tricep Pushdown, Skull Crusher, Lateral Raise, Lat Pulldown, Seat
 Face Pull, Leg Curl, Leg Extension, Calf Raise, Shrug, Arnold Press, Sumo Deadlift
 
 Output format: [{"exerciseName":"...","weight":0,"reps":0,"sets":1}]
-If text contains multiple sets (e.g. "then"), return multiple objects.
-If you cannot determine weight or reps, return [].`,
+If text contains multiple sets (e.g. "then", "and"), return multiple objects.
+Only return [] if you truly cannot determine weight OR reps.${contextNote}`,
       messages: [{ role: 'user', content: text }],
     });
 

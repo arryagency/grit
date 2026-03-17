@@ -5,12 +5,11 @@ import {
   TouchableOpacity,
   StyleSheet,
   ScrollView,
-  FlatList,
   KeyboardAvoidingView,
   Platform,
   SafeAreaView,
 } from 'react-native';
-import { useState, useRef, useCallback, useEffect, memo } from 'react';
+import { useState, useRef, useEffect, memo } from 'react';
 import { router } from 'expo-router';
 import { saveProfile, UserProfile } from '@/utils/storage';
 import { scheduleWorkoutNotifications } from '@/utils/notifications';
@@ -295,35 +294,15 @@ export default function OnboardingScreen() {
 }
 
 // ─── Gym Time Picker Component ────────────────────────────────────────────────
+//
+// Root-cause fix for lag:
+//   FlatList + extraData + renderItem recreation caused ALL visible items to
+//   reconcile on every selection change. Replaced with a plain ScrollView whose
+//   items are completely static (rendered once, never updated). Selection is
+//   tracked only by a ref — no state inside the picker, zero re-renders.
+//   The highlight band is a static absolutely-positioned view; it always sits at
+//   the center row and visually indicates whichever item is scrolled there.
 
-/** Individual row — memoized so only the 2 items that change selection actually re-render. */
-const TimePickerItem = memo(function TimePickerItem({
-  label,
-  isSelected,
-  onSelect,
-  index,
-  value,
-}: {
-  label: string;
-  isSelected: boolean;
-  onSelect: (v: string, idx: number) => void;
-  index: number;
-  value: string;
-}) {
-  return (
-    <TouchableOpacity
-      style={pickerStyles.item}
-      onPress={() => onSelect(value, index)}
-      activeOpacity={0.7}
-    >
-      <Text style={[pickerStyles.itemText, isSelected && pickerStyles.itemTextSelected]}>
-        {label}
-      </Text>
-    </TouchableOpacity>
-  );
-});
-
-/** Wrap in memo so parent re-renders (from other state changes) don't propagate in. */
 const GymTimePicker = memo(function GymTimePicker({
   value,
   onChange,
@@ -331,30 +310,24 @@ const GymTimePicker = memo(function GymTimePicker({
   value: string;
   onChange: (v: string) => void;
 }) {
-  const listRef = useRef<FlatList>(null);
-  // Track selection locally for instant visual feedback — don't wait for parent re-render
-  const [localSelected, setLocalSelected] = useState(
-    () => value || TIME_OPTIONS[12].value
-  );
-  // Keep onChange stable across renders without adding it as a dep
+  const scrollRef = useRef<ScrollView>(null);
+  // Keep onChange stable — never add it as a dep so memo works correctly
   const onChangeRef = useRef(onChange);
   onChangeRef.current = onChange;
 
-  // Sync when parent externally clears the value (Clear button)
+  // Compute initial scroll offset once on mount (not reactive)
+  const initialOffset = useRef(
+    Math.max(0, TIME_OPTIONS.findIndex((t) => t.value === value)) * TIME_ITEM_H
+  );
+
+  // When parent clears the value (Clear button), scroll back to default
   useEffect(() => {
-    if (!value && localSelected !== TIME_OPTIONS[12].value) {
-      setLocalSelected(TIME_OPTIONS[12].value);
-      listRef.current?.scrollToIndex({ index: 12, animated: false, viewPosition: 0.5 });
+    if (!value) {
+      scrollRef.current?.scrollTo({ y: 12 * TIME_ITEM_H, animated: true });
     }
   }, [value]);
 
-  const handleSelect = useCallback((v: string, idx: number) => {
-    setLocalSelected(v);
-    onChangeRef.current(v);
-    listRef.current?.scrollToIndex({ index: idx, animated: true, viewPosition: 0.5 });
-  }, []);
-
-  const onMomentumScrollEnd = useCallback((e: any) => {
+  function onMomentumScrollEnd(e: any) {
     const idx = Math.max(
       0,
       Math.min(
@@ -362,51 +335,42 @@ const GymTimePicker = memo(function GymTimePicker({
         TIME_OPTIONS.length - 1
       )
     );
-    const v = TIME_OPTIONS[idx].value;
-    setLocalSelected(v);
-    onChangeRef.current(v);
-  }, []);
-
-  const renderItem = useCallback(
-    ({ item, index }: { item: TimeOption; index: number }) => (
-      <TimePickerItem
-        label={item.label}
-        value={item.value}
-        index={index}
-        isSelected={item.value === localSelected}
-        onSelect={handleSelect}
-      />
-    ),
-    [localSelected, handleSelect]
-  );
-
-  const initialIdx = TIME_OPTIONS.findIndex((t) => t.value === localSelected);
+    onChangeRef.current(TIME_OPTIONS[idx].value);
+  }
 
   return (
     <View style={pickerStyles.wrapper}>
+      {/* Static highlight band — always at center row, no JS updates needed */}
       <View pointerEvents="none" style={pickerStyles.selectionBand} />
-      <FlatList
-        ref={listRef}
-        data={TIME_OPTIONS}
-        keyExtractor={(item) => item.value}
-        getItemLayout={(_, index) => ({
-          length: TIME_ITEM_H,
-          offset: TIME_ITEM_H * index,
-          index,
-        })}
-        initialScrollIndex={initialIdx >= 0 ? initialIdx : 12}
+
+      <ScrollView
+        ref={scrollRef}
+        style={{ height: PICKER_H }}
+        contentContainerStyle={{
+          paddingVertical: TIME_ITEM_H * Math.floor(PICKER_VISIBLE / 2),
+        }}
+        contentOffset={{ x: 0, y: initialOffset.current }}
         snapToInterval={TIME_ITEM_H}
         decelerationRate="fast"
         showsVerticalScrollIndicator={false}
         onMomentumScrollEnd={onMomentumScrollEnd}
-        onScrollToIndexFailed={() => {}}
-        contentContainerStyle={{
-          paddingVertical: TIME_ITEM_H * Math.floor(PICKER_VISIBLE / 2),
-        }}
-        renderItem={renderItem}
-        extraData={localSelected}
-        style={{ height: PICKER_H }}
-      />
+        // Let the scroll view settle natively before we report the value
+        scrollEventThrottle={0}
+      >
+        {TIME_OPTIONS.map((item, index) => (
+          <TouchableOpacity
+            key={item.value}
+            style={pickerStyles.item}
+            activeOpacity={0.6}
+            onPress={() => {
+              scrollRef.current?.scrollTo({ y: index * TIME_ITEM_H, animated: true });
+              onChangeRef.current(item.value);
+            }}
+          >
+            <Text style={pickerStyles.itemText}>{item.label}</Text>
+          </TouchableOpacity>
+        ))}
+      </ScrollView>
     </View>
   );
 });
@@ -442,11 +406,6 @@ const pickerStyles = StyleSheet.create({
     fontSize: FONT_SIZE.lg,
     color: COLORS.textMuted,
     fontWeight: '500',
-  },
-  itemTextSelected: {
-    color: COLORS.accent,
-    fontWeight: '800',
-    fontSize: FONT_SIZE.xl,
   },
 });
 

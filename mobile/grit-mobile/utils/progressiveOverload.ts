@@ -318,7 +318,7 @@ function parseSingleEntry(text: string, fallbackExercise: string | null = null):
     working = working.replace(kgMatch[0], ' ');
   }
 
-  // 3. Explicit reps: "8 reps" or "for 8"
+  // 3. Explicit reps: "8 reps", "for 8", "reps each", "each" as qualifier
   if (!taggedReps) {
     const repsMatch =
       working.match(/\b(\d+)\s*reps?\b/i) ||
@@ -329,7 +329,19 @@ function parseSingleEntry(text: string, fallbackExercise: string | null = null):
     }
   }
 
-  // 4. Find exercise (search original text for best alias match)
+  // 4. Explicit sets count: "2 sets", "2 more sets", "do 3 sets" (only if no NxN already)
+  if (!sxrMatch) {
+    const setsMatch = working.match(/\b(\d+)\s+(?:more\s+)?sets?\b/i);
+    if (setsMatch) {
+      const n = parseInt(setsMatch[1], 10);
+      if (n >= 1 && n <= 20) {
+        sets = n;
+        working = working.replace(setsMatch[0], ' ');
+      }
+    }
+  }
+
+  // 5. Find exercise (search original text for best alias match)
   const exercise =
     findExerciseInText(lower) ??
     (fallbackExercise ? { name: fallbackExercise, key: '' } : null);
@@ -341,17 +353,16 @@ function parseSingleEntry(text: string, fallbackExercise: string | null = null):
     working = working.replace(new RegExp(escaped, 'gi'), ' ');
   }
 
-  // 5. Extract remaining numbers
+  // 6. Extract remaining numbers
   const nums = [...working.matchAll(/\d+(?:\.\d+)?/g)].map((m) => parseFloat(m[0]));
 
-  // 6. Assign weight and reps
+  // 7. Assign weight and reps
   let weight = taggedWeight;
   let reps = taggedReps;
 
   if (weight === null && reps === null) {
     if (nums.length >= 2) {
       const [a, b] = [nums[0], nums[1]];
-      // Heuristic: reps ≤ 30, weight > 30 (or just use position order)
       if (a > 30 && b <= 30) { weight = a; reps = b; }
       else if (b > 30 && a <= 30) { weight = b; reps = a; }
       else { weight = a; reps = b; }
@@ -382,21 +393,16 @@ function splitEntries(text: string): string[] {
 
 /**
  * Parse natural language workout log text into one or more set entries.
- *
- * Accepted formats (examples):
- *   "bench 80 8"                          → Bench Press, 80kg, 1×8
- *   "bench 80 4x8"                        → Bench Press, 80kg, 4×8
- *   "bench 50kg 6 reps"                   → Bench Press, 50kg, 1×6
- *   "i did bench 50kg for 6 reps"         → Bench Press, 50kg, 1×6
- *   "50kg bench 6"                        → Bench Press, 50kg, 1×6
- *   "bench press 80 8"                    → Bench Press, 80kg, 1×8
- *   "did 6 reps of bench at 50kg"         → Bench Press, 50kg, 1×6
- *   "bench 50kg 6, then 50kg 4, then 45kg 5" → three sets of Bench Press
+ * Pass `contextExercise` (the last logged exercise) as a fallback when
+ * the text doesn't name an exercise — e.g. "2 more sets of 40kg 10 reps".
  */
-export function parseQuickLog(text: string): QuickLogResult[] | null {
+export function parseQuickLog(
+  text: string,
+  contextExercise: string | null = null
+): QuickLogResult[] | null {
   const entries = splitEntries(text.trim());
   const results: QuickLogResult[] = [];
-  let lastExercise: string | null = null;
+  let lastExercise: string | null = contextExercise;
 
   for (const entry of entries) {
     const parsed = parseSingleEntry(entry, lastExercise);
@@ -407,4 +413,28 @@ export function parseQuickLog(text: string): QuickLogResult[] | null {
   }
 
   return results.length > 0 ? results : null;
+}
+
+/**
+ * When the parser can't produce a full result, determine the specific
+ * missing piece so the caller can ask a targeted question.
+ */
+export function getMissingPieceQuestion(
+  text: string,
+  contextExercise: string | null
+): string {
+  const lower = text.trim().toLowerCase();
+  const hasExercise =
+    findExerciseInText(lower) !== null || contextExercise !== null;
+  const hasKg = /\b\d+(?:\.\d+)?\s*kg\b/i.test(lower);
+  const hasRepsWord = /\b\d+\s*reps?\b/i.test(lower);
+  // Any number > 20 is likely a weight; any ≤ 30 could be reps
+  const numbers = [...lower.matchAll(/\b(\d+(?:\.\d+)?)\b/g)].map((m) => parseFloat(m[1]));
+  const likelyHasWeight = hasKg || numbers.some((n) => n > 20);
+  const likelyHasReps = hasRepsWord || numbers.some((n) => n > 0 && n <= 30);
+
+  if (!hasExercise) return 'Which exercise?';
+  if (!likelyHasWeight) return 'What weight did you use?';
+  if (!likelyHasReps) return 'How many reps?';
+  return 'What weight did you use?'; // last resort — something was ambiguous
 }
