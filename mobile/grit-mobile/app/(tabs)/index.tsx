@@ -22,7 +22,7 @@ import {
   getWeeklyVolume,
   formatDate,
 } from '@/utils/storage';
-import { getMotivationalLine } from '@/utils/progressiveOverload';
+import { getMotivationalLine, getQuoteOfTheDay } from '@/utils/progressiveOverload';
 import { COLORS, SPACING, FONT_SIZE, RADIUS } from '@/constants/theme';
 
 const DAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
@@ -109,10 +109,17 @@ export default function HomeScreen() {
           </View>
         </View>
 
-        {/* Motivational line */}
+        {/* Daily quote */}
         <View style={styles.motivationCard}>
-          <Text style={styles.motivationText}>{motivationalLine}</Text>
+          <Text style={styles.motivationText}>{getQuoteOfTheDay()}</Text>
         </View>
+
+        {/* Contextual status line — only shown when there's something worth saying */}
+        {sessions.length > 0 && daysSince < 999 && (
+          <View style={styles.contextLine}>
+            <Text style={styles.contextLineText}>{motivationalLine}</Text>
+          </View>
+        )}
 
         {/* Today's status */}
         <View style={styles.section}>
@@ -278,6 +285,15 @@ const styles = StyleSheet.create({
     color: COLORS.text,
     fontStyle: 'italic',
     lineHeight: 22,
+  },
+  contextLine: {
+    marginHorizontal: SPACING.xl,
+    marginTop: -SPACING.lg,
+    marginBottom: SPACING.xl,
+  },
+  contextLineText: {
+    fontSize: FONT_SIZE.sm,
+    color: COLORS.textMuted,
   },
   section: {
     marginHorizontal: SPACING.xl,

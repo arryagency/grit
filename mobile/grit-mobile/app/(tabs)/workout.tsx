@@ -76,6 +76,9 @@ export default function WorkoutScreen() {
   // Quick log
   const [quickText, setQuickText] = useState('');
   const [quickError, setQuickError] = useState('');
+  const [quickWarmUp, setQuickWarmUp] = useState(false);
+  // Track last-logged exercise so we can show a running set list
+  const [lastLoggedExercise, setLastLoggedExercise] = useState<string | null>(null);
 
   // Check-in
   const [showCheckIn, setShowCheckIn] = useState(false);
@@ -212,29 +215,38 @@ export default function WorkoutScreen() {
   // ─── Quick Log ──────────────────────────────────────────────────────────────
 
   function handleQuickLog() {
-    if (!quickText.trim()) return;
-    const parsed = parseQuickLog(quickText);
+    const text = quickText.trim();
+    if (!text) return;
+
+    const parsed = parseQuickLog(text);
     if (!parsed) {
-      setQuickError('Try: "bench 80 4x8" or "squat 100 3x5"');
+      setQuickError('e.g. "bench 80 8" or "bench 80 4x8" or "warm up bench 60 10"');
       return;
     }
+
+    // The W toggle in the bar overrides the parsed warmUp flag
+    const isWarmUp = parsed.warmUp || quickWarmUp;
+
     setQuickError('');
+    setLastLoggedExercise(parsed.exerciseName);
+    setQuickWarmUp(false); // reset toggle after log
+
     setSession((prev) => {
       const existingIdx = prev.exercises.findIndex(
         (e) => e.name.toLowerCase() === parsed.exerciseName.toLowerCase()
       );
-      // Build completed sets
       const newSets: SetLog[] = Array.from({ length: parsed.sets }, () => ({
         weight: parsed.weight,
         reps: parsed.reps,
         completed: true,
         isPR: false,
+        warmUp: isWarmUp,
       }));
 
       if (existingIdx >= 0) {
         const exercises = [...prev.exercises];
         const ex = { ...exercises[existingIdx] };
-        // Replace any zero-weight placeholder sets first, then append
+        // Drop empty placeholder sets, then append new ones
         const realSets = ex.sets.filter((s) => s.weight > 0 || s.reps > 0);
         ex.sets = [...realSets, ...newSets];
         exercises[existingIdx] = ex;
@@ -431,13 +443,44 @@ export default function WorkoutScreen() {
           <View style={{ height: 100 }} />
         </ScrollView>
 
+        {/* Running set log for last-logged exercise */}
+        {lastLoggedExercise && (() => {
+          const ex = session.exercises.find(
+            (e) => e.name.toLowerCase() === lastLoggedExercise.toLowerCase()
+          );
+          const doneSets = ex?.sets.filter((s) => s.completed) ?? [];
+          if (doneSets.length === 0) return null;
+          return (
+            <View style={styles.runningLog}>
+              <Text style={styles.runningLogName} numberOfLines={1}>{lastLoggedExercise}</Text>
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ flex: 1 }}>
+                <View style={styles.runningLogSets}>
+                  {doneSets.map((s, i) => (
+                    <View key={i} style={[styles.runningSetChip, s.warmUp && styles.runningSetChipWarm]}>
+                      <Text style={[styles.runningSetText, s.warmUp && styles.runningSetTextWarm]}>
+                        {s.warmUp ? 'W ' : ''}{s.weight}×{s.reps}
+                      </Text>
+                    </View>
+                  ))}
+                </View>
+              </ScrollView>
+            </View>
+          );
+        })()}
+
         {/* Quick Log Bar */}
         <View style={styles.quickLogBar}>
+          <TouchableOpacity
+            style={[styles.warmUpToggle, quickWarmUp && styles.warmUpToggleActive]}
+            onPress={() => setQuickWarmUp((v) => !v)}
+          >
+            <Text style={[styles.warmUpToggleText, quickWarmUp && styles.warmUpToggleTextActive]}>W</Text>
+          </TouchableOpacity>
           <TextInput
             style={styles.quickLogInput}
             value={quickText}
             onChangeText={(t) => { setQuickText(t); setQuickError(''); }}
-            placeholder='bench 80 4x8'
+            placeholder='bench 80 8  ·  squat 100 3x5'
             placeholderTextColor={COLORS.textMuted}
             returnKeyType="done"
             onSubmitEditing={handleQuickLog}
@@ -627,7 +670,10 @@ function SetRow({
 }: SetRowProps) {
   return (
     <View style={[setStyles.row, set.completed && setStyles.rowCompleted]}>
-      <Text style={setStyles.setNum}>{setNum}</Text>
+      <View style={setStyles.setNumWrap}>
+        <Text style={setStyles.setNum}>{setNum}</Text>
+        {set.warmUp && <Text style={setStyles.warmBadge}>W</Text>}
+      </View>
       <View style={setStyles.counterGroup}>
         <TouchableOpacity style={setStyles.adjBtn} onPress={() => onWeightDelta(-1)}>
           <Text style={setStyles.adjText}>−</Text>
@@ -892,16 +938,80 @@ const styles = StyleSheet.create({
     borderStyle: 'dashed',
   },
   addExerciseText: { fontSize: FONT_SIZE.md, color: COLORS.accent, fontWeight: '700' },
+  // Running log strip
+  runningLog: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: COLORS.surfaceAlt,
+    borderTopWidth: 1,
+    borderTopColor: COLORS.border,
+    paddingHorizontal: SPACING.md,
+    paddingVertical: SPACING.xs,
+    gap: SPACING.sm,
+  },
+  runningLogName: {
+    fontSize: FONT_SIZE.xs,
+    fontWeight: '700',
+    color: COLORS.textMuted,
+    maxWidth: 90,
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+  },
+  runningLogSets: {
+    flexDirection: 'row',
+    gap: SPACING.xs,
+  },
+  runningSetChip: {
+    backgroundColor: COLORS.border,
+    borderRadius: RADIUS.xs,
+    paddingHorizontal: SPACING.sm,
+    paddingVertical: 3,
+  },
+  runningSetChipWarm: {
+    backgroundColor: 'rgba(255,136,0,0.12)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,136,0,0.3)',
+  },
+  runningSetText: {
+    fontSize: FONT_SIZE.xs,
+    color: COLORS.text,
+    fontWeight: '600',
+  },
+  runningSetTextWarm: {
+    color: COLORS.warning,
+  },
   // Quick Log Bar
   quickLogBar: {
     borderTopWidth: 1,
     borderTopColor: COLORS.border,
     backgroundColor: COLORS.surface,
-    paddingHorizontal: SPACING.lg,
+    paddingHorizontal: SPACING.sm,
     paddingVertical: SPACING.sm,
     flexDirection: 'row',
     alignItems: 'center',
-    gap: SPACING.sm,
+    gap: SPACING.xs,
+  },
+  warmUpToggle: {
+    width: 36,
+    height: 40,
+    borderRadius: RADIUS.sm,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: COLORS.surfaceAlt,
+  },
+  warmUpToggleActive: {
+    backgroundColor: 'rgba(255,136,0,0.15)',
+    borderColor: COLORS.warning,
+  },
+  warmUpToggleText: {
+    fontSize: FONT_SIZE.sm,
+    fontWeight: '800',
+    color: COLORS.textMuted,
+  },
+  warmUpToggleTextActive: {
+    color: COLORS.warning,
   },
   quickLogInput: {
     flex: 1,
@@ -909,7 +1019,7 @@ const styles = StyleSheet.create({
     borderRadius: RADIUS.md,
     paddingHorizontal: SPACING.md,
     paddingVertical: SPACING.sm,
-    fontSize: FONT_SIZE.md,
+    fontSize: FONT_SIZE.sm,
     color: COLORS.text,
     fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
   },
@@ -923,10 +1033,15 @@ const styles = StyleSheet.create({
   },
   quickLogError: {
     position: 'absolute',
-    bottom: 60,
+    bottom: 62,
     left: SPACING.lg,
+    right: SPACING.lg,
     fontSize: FONT_SIZE.xs,
     color: COLORS.danger,
+    backgroundColor: COLORS.surface,
+    paddingHorizontal: SPACING.sm,
+    paddingVertical: 3,
+    borderRadius: RADIUS.xs,
   },
   modalContainer: { flex: 1, backgroundColor: COLORS.background },
   modalHeader: {
@@ -998,7 +1113,9 @@ const styles = StyleSheet.create({
 const setStyles = StyleSheet.create({
   row: { flexDirection: 'row', alignItems: 'center', paddingVertical: SPACING.sm, gap: SPACING.sm },
   rowCompleted: { opacity: 0.55 },
-  setNum: { width: 24, fontSize: FONT_SIZE.sm, fontWeight: '700', color: COLORS.textMuted, textAlign: 'center' },
+  setNumWrap: { width: 28, alignItems: 'center', gap: 2 },
+  setNum: { fontSize: FONT_SIZE.sm, fontWeight: '700', color: COLORS.textMuted, textAlign: 'center' },
+  warmBadge: { fontSize: 9, fontWeight: '800', color: COLORS.warning, letterSpacing: 0.5 },
   counterGroup: {
     flex: 1,
     flexDirection: 'row',

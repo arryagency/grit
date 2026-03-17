@@ -20,6 +20,7 @@ export interface SetLog {
   reps: number;
   completed: boolean;
   isPR: boolean;
+  warmUp?: boolean; // warm-up sets excluded from progressive overload calculations
 }
 
 export interface ExerciseLog {

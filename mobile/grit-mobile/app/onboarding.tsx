@@ -5,11 +5,12 @@ import {
   TouchableOpacity,
   StyleSheet,
   ScrollView,
+  FlatList,
   KeyboardAvoidingView,
   Platform,
   SafeAreaView,
 } from 'react-native';
-import { useState } from 'react';
+import { useState, useRef, useCallback } from 'react';
 import { router } from 'expo-router';
 import { saveProfile, UserProfile } from '@/utils/storage';
 import { scheduleWorkoutNotifications } from '@/utils/notifications';
@@ -18,17 +19,32 @@ import { COLORS, SPACING, FONT_SIZE, RADIUS } from '@/constants/theme';
 const DAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 const EQUIPMENT_OPTIONS = ['Full gym', 'Dumbbells only', 'Barbell + rack', 'Bodyweight only', 'Mixed/home gym'];
 const GOAL_OPTIONS = ['Build strength', 'Build muscle', 'Lose fat', 'Athletic performance', 'General fitness'];
-const GYM_TIME_OPTIONS = [
-  { label: '6am', value: '06:00' },
-  { label: '7am', value: '07:00' },
-  { label: '8am', value: '08:00' },
-  { label: '9am', value: '09:00' },
-  { label: '12pm', value: '12:00' },
-  { label: '5pm', value: '17:00' },
-  { label: '6pm', value: '18:00' },
-  { label: '7pm', value: '19:00' },
-  { label: '8pm', value: '20:00' },
-];
+
+// ─── Time picker data ─────────────────────────────────────────────────────────
+
+interface TimeOption { label: string; value: string }
+
+function buildTimes(): TimeOption[] {
+  const times: TimeOption[] = [];
+  for (let h = 5; h <= 23; h++) {
+    for (let m = 0; m < 60; m += 15) {
+      if (h === 23 && m > 0) break;
+      const hh = String(h).padStart(2, '0');
+      const mm = String(m).padStart(2, '0');
+      const value = `${hh}:${mm}`;
+      const h12 = h > 12 ? h - 12 : h === 0 ? 12 : h;
+      const ampm = h >= 12 ? 'pm' : 'am';
+      const label = m === 0 ? `${h12}:00 ${ampm}` : `${h12}:${mm} ${ampm}`;
+      times.push({ label, value });
+    }
+  }
+  return times;
+}
+
+const TIME_OPTIONS = buildTimes();
+const TIME_ITEM_H = 52;
+const PICKER_VISIBLE = 5; // odd number so middle item is the selected one
+const PICKER_H = TIME_ITEM_H * PICKER_VISIBLE;
 
 const TOTAL_STEPS = 7;
 
@@ -212,22 +228,21 @@ export default function OnboardingScreen() {
               <Text style={styles.stepLabel}>Step 6 of {TOTAL_STEPS}</Text>
               <Text style={styles.question}>What time do you usually train?</Text>
               <Text style={styles.subText}>
-                We'll send a heads-up 15 mins before, and follow up if you skip.
+                We'll send a heads-up 15 mins before, and check in if you skip.
               </Text>
-              <View style={styles.daysGrid}>
-                {GYM_TIME_OPTIONS.map((opt) => (
-                  <TouchableOpacity
-                    key={opt.value}
-                    style={[styles.timeButton, gymTime === opt.value && styles.dayButtonActive]}
-                    onPress={() => setGymTime(gymTime === opt.value ? '' : opt.value)}
-                  >
-                    <Text style={[styles.dayLabel, gymTime === opt.value && styles.dayLabelActive]}>
-                      {opt.label}
-                    </Text>
+              <GymTimePicker value={gymTime} onChange={setGymTime} />
+              {gymTime ? (
+                <View style={styles.selectedTimeRow}>
+                  <Text style={styles.selectedTimeText}>
+                    Selected: {TIME_OPTIONS.find(t => t.value === gymTime)?.label ?? gymTime}
+                  </Text>
+                  <TouchableOpacity onPress={() => setGymTime('')}>
+                    <Text style={styles.clearTimeText}>Clear</Text>
                   </TouchableOpacity>
-                ))}
-              </View>
-              <Text style={styles.subText}>Optional — tap to select, tap again to clear.</Text>
+                </View>
+              ) : (
+                <Text style={styles.subText}>Optional — scroll to your time, tap to confirm.</Text>
+              )}
             </View>
           )}
 
@@ -278,6 +293,109 @@ export default function OnboardingScreen() {
     </SafeAreaView>
   );
 }
+
+// ─── Gym Time Picker Component ────────────────────────────────────────────────
+
+function GymTimePicker({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+  const listRef = useRef<FlatList>(null);
+  const selectedIdx = TIME_OPTIONS.findIndex((t) => t.value === value);
+
+  const scrollToIndex = useCallback((idx: number, animated = true) => {
+    if (idx >= 0) {
+      listRef.current?.scrollToIndex({ index: idx, animated, viewPosition: 0.5 });
+    }
+  }, []);
+
+  function onMomentumScrollEnd(e: any) {
+    const offset = e.nativeEvent.contentOffset.y;
+    const idx = Math.round(offset / TIME_ITEM_H);
+    const clamped = Math.max(0, Math.min(idx, TIME_OPTIONS.length - 1));
+    onChange(TIME_OPTIONS[clamped].value);
+  }
+
+  return (
+    <View style={pickerStyles.wrapper}>
+      {/* Selection highlight band */}
+      <View pointerEvents="none" style={pickerStyles.selectionBand} />
+
+      <FlatList
+        ref={listRef}
+        data={TIME_OPTIONS}
+        keyExtractor={(item) => item.value}
+        getItemLayout={(_, index) => ({
+          length: TIME_ITEM_H,
+          offset: TIME_ITEM_H * index,
+          index,
+        })}
+        initialScrollIndex={selectedIdx >= 0 ? selectedIdx : 12} // default ~18:00
+        snapToInterval={TIME_ITEM_H}
+        decelerationRate="fast"
+        showsVerticalScrollIndicator={false}
+        onMomentumScrollEnd={onMomentumScrollEnd}
+        onScrollToIndexFailed={() => {}}
+        contentContainerStyle={{
+          paddingVertical: TIME_ITEM_H * Math.floor(PICKER_VISIBLE / 2),
+        }}
+        renderItem={({ item, index }) => {
+          const isSelected = item.value === value;
+          return (
+            <TouchableOpacity
+              style={pickerStyles.item}
+              onPress={() => { onChange(item.value); scrollToIndex(index); }}
+              activeOpacity={0.7}
+            >
+              <Text style={[pickerStyles.itemText, isSelected && pickerStyles.itemTextSelected]}>
+                {item.label}
+              </Text>
+            </TouchableOpacity>
+          );
+        }}
+        style={{ height: PICKER_H }}
+      />
+    </View>
+  );
+}
+
+const pickerStyles = StyleSheet.create({
+  wrapper: {
+    position: 'relative',
+    overflow: 'hidden',
+    borderRadius: RADIUS.md,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    backgroundColor: COLORS.surface,
+    marginTop: SPACING.md,
+  },
+  selectionBand: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    top: TIME_ITEM_H * Math.floor(PICKER_VISIBLE / 2),
+    height: TIME_ITEM_H,
+    borderTopWidth: 1,
+    borderBottomWidth: 1,
+    borderColor: COLORS.accent,
+    backgroundColor: COLORS.accentDim,
+    zIndex: 1,
+  },
+  item: {
+    height: TIME_ITEM_H,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  itemText: {
+    fontSize: FONT_SIZE.lg,
+    color: COLORS.textMuted,
+    fontWeight: '500',
+  },
+  itemTextSelected: {
+    color: COLORS.accent,
+    fontWeight: '800',
+    fontSize: FONT_SIZE.xl,
+  },
+});
+
+// ─── Main styles ──────────────────────────────────────────────────────────────
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: COLORS.background },
@@ -389,15 +507,21 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     backgroundColor: COLORS.surface,
   },
-  timeButton: {
-    paddingHorizontal: 14,
-    height: 44,
-    borderRadius: RADIUS.full,
-    borderWidth: 1,
-    borderColor: COLORS.border,
+  selectedTimeRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
     alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: COLORS.surface,
+    marginTop: SPACING.sm,
+  },
+  selectedTimeText: {
+    fontSize: FONT_SIZE.sm,
+    color: COLORS.accent,
+    fontWeight: '700',
+  },
+  clearTimeText: {
+    fontSize: FONT_SIZE.sm,
+    color: COLORS.textSecondary,
+    fontWeight: '600',
   },
   dayButtonActive: {
     backgroundColor: COLORS.accent,
