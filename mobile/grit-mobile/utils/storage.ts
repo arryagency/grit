@@ -44,12 +44,53 @@ export interface PRRecord {
   };
 }
 
+export interface BodyWeightEntry {
+  id: string;
+  weight: number; // kg
+  date: string;   // ISO string
+}
+
+export interface WaterEntry {
+  date: string;   // YYYY-MM-DD
+  amount: number; // ml consumed today
+  goal: number;   // ml daily goal
+}
+
+export interface WorkoutTemplate {
+  id: string;
+  name: string;
+  createdAt: string;
+  exercises: {
+    name: string;
+    defaultWeight: number;
+    defaultReps: number;
+    sets: number;
+  }[];
+}
+
+export interface PhysiquePhoto {
+  id: string;
+  uri: string;  // local file URI
+  date: string; // ISO string
+  note: string;
+}
+
+export interface AppSettings {
+  restTimerDefault: number; // seconds, default 180
+  waterGoal: number;        // ml, default 2500
+}
+
 // ─── Keys ────────────────────────────────────────────────────────────────────
 
 const KEYS = {
   PROFILE: '@grit/profile',
   SESSIONS: '@grit/sessions',
   PRS: '@grit/prs',
+  BODY_WEIGHT: '@grit/bodyweight',
+  WATER: '@grit/water',
+  TEMPLATES: '@grit/templates',
+  PHYSIQUE: '@grit/physique',
+  SETTINGS: '@grit/settings',
 };
 
 // ─── Profile ─────────────────────────────────────────────────────────────────
@@ -81,10 +122,8 @@ export async function saveProfile(profile: UserProfile): Promise<void> {
 
 export async function getSessions(): Promise<WorkoutSession[]> {
   try {
-    console.log('[GRIT storage] getSessions() called');
     const data = await AsyncStorage.getItem(KEYS.SESSIONS);
     const sessions = data ? JSON.parse(data) : [];
-    console.log('[GRIT storage] getSessions() returned', sessions.length, 'sessions');
     return sessions;
   } catch (e: any) {
     console.error('[GRIT storage] getSessions() failed:', e?.message);
@@ -145,6 +184,175 @@ export async function updatePRs(
 
   await AsyncStorage.setItem(KEYS.PRS, JSON.stringify(prs));
   return newPRs;
+}
+
+// ─── Body Weight ──────────────────────────────────────────────────────────────
+
+export async function getBodyWeightEntries(): Promise<BodyWeightEntry[]> {
+  try {
+    const data = await AsyncStorage.getItem(KEYS.BODY_WEIGHT);
+    return data ? JSON.parse(data) : [];
+  } catch {
+    return [];
+  }
+}
+
+export async function addBodyWeightEntry(weight: number): Promise<void> {
+  const entries = await getBodyWeightEntries();
+  entries.unshift({ id: generateId(), weight, date: new Date().toISOString() });
+  await AsyncStorage.setItem(KEYS.BODY_WEIGHT, JSON.stringify(entries));
+}
+
+export async function deleteBodyWeightEntry(id: string): Promise<void> {
+  const entries = await getBodyWeightEntries();
+  await AsyncStorage.setItem(
+    KEYS.BODY_WEIGHT,
+    JSON.stringify(entries.filter((e) => e.id !== id))
+  );
+}
+
+export function getBodyWeightTrend(
+  entries: BodyWeightEntry[]
+): 'gaining' | 'losing' | 'maintaining' | null {
+  if (entries.length < 3) return null;
+  const sorted = [...entries].sort(
+    (a, b) => new Date(a.date).getTime() - new Date(b.date).getTime()
+  );
+  const recent = sorted.slice(-5);
+  const diff = recent[recent.length - 1].weight - recent[0].weight;
+  if (diff > 0.5) return 'gaining';
+  if (diff < -0.5) return 'losing';
+  return 'maintaining';
+}
+
+// ─── Water ────────────────────────────────────────────────────────────────────
+
+function getTodayKey(): string {
+  return new Date().toISOString().split('T')[0];
+}
+
+export async function getTodayWater(): Promise<WaterEntry> {
+  try {
+    const data = await AsyncStorage.getItem(KEYS.WATER);
+    const all: WaterEntry[] = data ? JSON.parse(data) : [];
+    const today = getTodayKey();
+    return all.find((e) => e.date === today) ?? { date: today, amount: 0, goal: 2500 };
+  } catch {
+    return { date: getTodayKey(), amount: 0, goal: 2500 };
+  }
+}
+
+export async function addWater(ml: number): Promise<WaterEntry> {
+  const data = await AsyncStorage.getItem(KEYS.WATER);
+  const all: WaterEntry[] = data ? JSON.parse(data) : [];
+  const today = getTodayKey();
+  const existing = all.find((e) => e.date === today);
+  if (existing) {
+    existing.amount = Math.min(existing.amount + ml, existing.goal * 2);
+  } else {
+    all.unshift({ date: today, amount: ml, goal: 2500 });
+  }
+  await AsyncStorage.setItem(KEYS.WATER, JSON.stringify(all));
+  return all.find((e) => e.date === today)!;
+}
+
+export async function setWaterGoal(ml: number): Promise<void> {
+  const data = await AsyncStorage.getItem(KEYS.WATER);
+  const all: WaterEntry[] = data ? JSON.parse(data) : [];
+  const today = getTodayKey();
+  const existing = all.find((e) => e.date === today);
+  if (existing) {
+    existing.goal = ml;
+  } else {
+    all.unshift({ date: today, amount: 0, goal: ml });
+  }
+  await AsyncStorage.setItem(KEYS.WATER, JSON.stringify(all));
+}
+
+export async function getWeeklyWaterAverage(): Promise<number> {
+  try {
+    const data = await AsyncStorage.getItem(KEYS.WATER);
+    const all: WaterEntry[] = data ? JSON.parse(data) : [];
+    if (all.length === 0) return 0;
+    const sevenDaysAgo = new Date();
+    sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+    const recent = all.filter((e) => new Date(e.date) >= sevenDaysAgo);
+    if (recent.length === 0) return 0;
+    return Math.round(recent.reduce((sum, e) => sum + e.amount, 0) / recent.length);
+  } catch {
+    return 0;
+  }
+}
+
+// ─── Templates ────────────────────────────────────────────────────────────────
+
+export async function getTemplates(): Promise<WorkoutTemplate[]> {
+  try {
+    const data = await AsyncStorage.getItem(KEYS.TEMPLATES);
+    return data ? JSON.parse(data) : [];
+  } catch {
+    return [];
+  }
+}
+
+export async function saveTemplate(template: WorkoutTemplate): Promise<void> {
+  const templates = await getTemplates();
+  templates.unshift(template);
+  await AsyncStorage.setItem(KEYS.TEMPLATES, JSON.stringify(templates));
+}
+
+export async function deleteTemplate(id: string): Promise<void> {
+  const templates = await getTemplates();
+  await AsyncStorage.setItem(
+    KEYS.TEMPLATES,
+    JSON.stringify(templates.filter((t) => t.id !== id))
+  );
+}
+
+// ─── Physique ─────────────────────────────────────────────────────────────────
+
+export async function getPhysiquePhotos(): Promise<PhysiquePhoto[]> {
+  try {
+    const data = await AsyncStorage.getItem(KEYS.PHYSIQUE);
+    return data ? JSON.parse(data) : [];
+  } catch {
+    return [];
+  }
+}
+
+export async function addPhysiquePhoto(uri: string, note: string = ''): Promise<void> {
+  const photos = await getPhysiquePhotos();
+  photos.unshift({ id: generateId(), uri, date: new Date().toISOString(), note });
+  await AsyncStorage.setItem(KEYS.PHYSIQUE, JSON.stringify(photos));
+}
+
+export async function deletePhysiquePhoto(id: string): Promise<void> {
+  const photos = await getPhysiquePhotos();
+  await AsyncStorage.setItem(
+    KEYS.PHYSIQUE,
+    JSON.stringify(photos.filter((p) => p.id !== id))
+  );
+}
+
+// ─── Settings ─────────────────────────────────────────────────────────────────
+
+const DEFAULT_SETTINGS: AppSettings = {
+  restTimerDefault: 180,
+  waterGoal: 2500,
+};
+
+export async function getSettings(): Promise<AppSettings> {
+  try {
+    const data = await AsyncStorage.getItem(KEYS.SETTINGS);
+    return data ? { ...DEFAULT_SETTINGS, ...JSON.parse(data) } : DEFAULT_SETTINGS;
+  } catch {
+    return DEFAULT_SETTINGS;
+  }
+}
+
+export async function saveSettings(settings: Partial<AppSettings>): Promise<void> {
+  const current = await getSettings();
+  await AsyncStorage.setItem(KEYS.SETTINGS, JSON.stringify({ ...current, ...settings }));
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────

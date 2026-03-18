@@ -236,6 +236,69 @@ export async function checkGymTimeMissed(
   }
 }
 
+// ─── Water intake check ───────────────────────────────────────────────────────
+
+/**
+ * Fire an afternoon notification if today's water intake is below 60% of goal.
+ * Only fires between 14:00 and 18:00.
+ */
+export async function checkAndNotifyLowWater(
+  todayWaterMl: number,
+  goalMl: number
+): Promise<void> {
+  if (Platform.OS === 'web') return;
+  try {
+    const hour = new Date().getHours();
+    if (hour < 14 || hour >= 18) return;
+    if (todayWaterMl >= goalMl * 0.6) return;
+
+    const granted = await requestNotificationPermissions();
+    if (!granted) return;
+
+    const Notifications = getNotifications();
+    const litres = (todayWaterMl / 1000).toFixed(1);
+    await Notifications.scheduleNotificationAsync({
+      content: {
+        title: 'GRIT',
+        body: `You've had ${litres}L today. Drink more — performance suffers when you're dehydrated.`,
+      },
+      trigger: null,
+    });
+  } catch (e: any) {
+    console.log('[GRIT notifications] checkAndNotifyLowWater failed (non-fatal):', e?.message);
+  }
+}
+
+// ─── Physique photo reminder ──────────────────────────────────────────────────
+
+/**
+ * Schedule a weekly Sunday reminder at 10:00 to take a physique photo.
+ */
+export async function schedulePhysiqueReminder(): Promise<void> {
+  if (Platform.OS === 'web') return;
+  try {
+    const granted = await requestNotificationPermissions();
+    if (!granted) return;
+
+    const Notifications = getNotifications();
+    await Notifications.scheduleNotificationAsync({
+      content: {
+        title: 'GRIT',
+        body: "Sunday check-in. Take your weekly physique photo to track your transformation.",
+      },
+      trigger: {
+        type: 'weekly' as const,
+        weekday: 1, // Sunday = 1 in expo-notifications (1=Sun, 2=Mon, ..., 7=Sat)
+        hour: 10,
+        minute: 0,
+      } as any,
+    });
+    console.log('[GRIT notifications] physique reminder scheduled');
+  } catch (e: any) {
+    console.log('[GRIT notifications] schedulePhysiqueReminder failed (non-fatal):', e?.message);
+  }
+}
+
 // ─── Streak protection ────────────────────────────────────────────────────────
 
 /**

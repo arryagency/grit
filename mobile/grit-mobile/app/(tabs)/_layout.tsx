@@ -55,12 +55,13 @@ export default function TabLayout() {
         }}
       />
       <Tabs.Screen
-        name="chat"
+        name="records"
         options={{
-          title: 'Chat',
-          tabBarIcon: ({ focused }) => <TabIcon name="chatbubble" focused={focused} />,
+          title: 'Records',
+          tabBarIcon: ({ focused }) => <TabIcon name="trophy" focused={focused} />,
         }}
       />
+      <Tabs.Screen name="chat" options={{ href: null }} />
       <Tabs.Screen name="explore" options={{ href: null }} />
     </Tabs>
   );

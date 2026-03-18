@@ -21,6 +21,12 @@ import {
   getDaysSinceLastWorkout,
   getWeeklyVolume,
   formatDate,
+  getBodyWeightEntries,
+  getBodyWeightTrend,
+  getTodayWater,
+  addWater,
+  BodyWeightEntry,
+  WaterEntry,
 } from '@/utils/storage';
 import { getMotivationalLine } from '@/utils/progressiveOverload';
 import { COLORS, SPACING, FONT_SIZE, RADIUS } from '@/constants/theme';
@@ -49,11 +55,20 @@ export default function HomeScreen() {
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [sessions, setSessions] = useState<WorkoutSession[]>([]);
   const [refreshing, setRefreshing] = useState(false);
+  const [bodyWeightEntries, setBodyWeightEntries] = useState<BodyWeightEntry[]>([]);
+  const [water, setWater] = useState<WaterEntry>({ date: '', amount: 0, goal: 2500 });
 
   async function load() {
-    const [p, s] = await Promise.all([getProfile(), getSessions()]);
+    const [p, s, bw, w] = await Promise.all([
+      getProfile(),
+      getSessions(),
+      getBodyWeightEntries(),
+      getTodayWater(),
+    ]);
     setProfile(p);
     setSessions(s);
+    setBodyWeightEntries(bw);
+    setWater(w);
   }
 
   useFocusEffect(
@@ -76,6 +91,24 @@ export default function HomeScreen() {
 
   const today = new Date().getDay();
   const isTrainingDay = profile?.trainingDays?.includes(today) ?? false;
+
+  // Body weight
+  const currentWeight = bodyWeightEntries.length > 0 ? bodyWeightEntries[0].weight : null;
+  const bwTrend = getBodyWeightTrend(bodyWeightEntries);
+  const sortedBW = [...bodyWeightEntries].sort(
+    (a, b) => new Date(a.date).getTime() - new Date(b.date).getTime()
+  );
+  const startWeight = sortedBW.length > 0 ? sortedBW[0].weight : null;
+  const weightChange =
+    currentWeight && startWeight ? currentWeight - startWeight : null;
+
+  // Water
+  const waterPct = water.goal > 0 ? Math.min(water.amount / water.goal, 1) : 0;
+
+  async function handleAddWater(ml: number) {
+    const updated = await addWater(ml);
+    setWater(updated);
+  }
 
   function formatVol(v: number) {
     if (v === 0) return '—';
@@ -138,6 +171,122 @@ export default function HomeScreen() {
               </Text>
             </TouchableOpacity>
           </View>
+        </View>
+
+        {/* Body weight widget */}
+        <View style={styles.section}>
+          <Text style={styles.sectionLabel}>Body weight</Text>
+          <TouchableOpacity
+            style={styles.bwWidget}
+            onPress={() => router.push('/(tabs)/progress')}
+            activeOpacity={0.7}
+          >
+            {currentWeight ? (
+              <>
+                <View style={styles.bwWidgetLeft}>
+                  <Text style={styles.bwWeightValue}>{currentWeight}kg</Text>
+                  <Text style={styles.bwWeightLabel}>Current</Text>
+                </View>
+                <View style={styles.bwWidgetRight}>
+                  {weightChange !== null && Math.abs(weightChange) >= 0.1 && (
+                    <Text style={[
+                      styles.bwChange,
+                      { color: weightChange > 0 ? COLORS.success : COLORS.warning },
+                    ]}>
+                      {weightChange > 0 ? '+' : ''}{weightChange.toFixed(1)}kg since start
+                    </Text>
+                  )}
+                  {bwTrend && (
+                    <View style={styles.bwTrendBadge}>
+                      <Ionicons
+                        name={
+                          bwTrend === 'gaining' ? 'trending-up' :
+                          bwTrend === 'losing' ? 'trending-down' :
+                          'remove'
+                        }
+                        size={12}
+                        color={
+                          bwTrend === 'gaining' ? COLORS.success :
+                          bwTrend === 'losing' ? COLORS.warning :
+                          COLORS.textSecondary
+                        }
+                      />
+                      <Text style={styles.bwTrendText}>
+                        {bwTrend === 'gaining' ? 'Gaining' : bwTrend === 'losing' ? 'Losing' : 'Maintaining'}
+                      </Text>
+                    </View>
+                  )}
+                  <Text style={styles.bwSeeMore}>Log weight →</Text>
+                </View>
+              </>
+            ) : (
+              <View style={styles.bwWidgetEmpty}>
+                <Ionicons name="scale-outline" size={18} color={COLORS.textMuted} />
+                <Text style={styles.bwEmptyText}>Tap to log your weight</Text>
+              </View>
+            )}
+          </TouchableOpacity>
+        </View>
+
+        {/* Water intake widget */}
+        <View style={styles.section}>
+          <Text style={styles.sectionLabel}>Water today</Text>
+          <View style={styles.waterWidget}>
+            <View style={styles.waterInfo}>
+              <Text style={styles.waterAmount}>
+                {(water.amount / 1000).toFixed(1)}L
+              </Text>
+              <Text style={styles.waterGoal}>/ {(water.goal / 1000).toFixed(1)}L goal</Text>
+            </View>
+            <View style={styles.waterProgressBar}>
+              <View
+                style={[
+                  styles.waterProgressFill,
+                  { width: `${waterPct * 100}%` },
+                  waterPct >= 1 && styles.waterProgressComplete,
+                ]}
+              />
+            </View>
+            <View style={styles.waterButtons}>
+              <TouchableOpacity style={styles.waterBtn} onPress={() => handleAddWater(250)}>
+                <Text style={styles.waterBtnText}>+250ml</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.waterBtn} onPress={() => handleAddWater(500)}>
+                <Text style={styles.waterBtnText}>+500ml</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.waterBtn, styles.waterBtnCustom]}
+                onPress={() => handleAddWater(750)}
+              >
+                <Text style={[styles.waterBtnText, { color: COLORS.accent }]}>+750ml</Text>
+              </TouchableOpacity>
+            </View>
+            {waterPct >= 1 && (
+              <View style={styles.waterComplete}>
+                <Ionicons name="checkmark-circle" size={14} color={COLORS.success} />
+                <Text style={styles.waterCompleteText}>Goal hit. Keep it up.</Text>
+              </View>
+            )}
+          </View>
+        </View>
+
+        {/* AI Programme card */}
+        <View style={styles.section}>
+          <TouchableOpacity
+            style={styles.programmeCard}
+            onPress={() => router.push('/programme')}
+            activeOpacity={0.7}
+          >
+            <View style={styles.programmeLeft}>
+              <Text style={styles.programmeTitle}>Build my programme</Text>
+              <Text style={styles.programmeSubtitle}>
+                AI-generated plan built around your schedule, goal, and availability
+              </Text>
+            </View>
+            <View style={styles.programmeIcon}>
+              <Ionicons name="sparkles" size={20} color={COLORS.background} />
+            </View>
+          </TouchableOpacity>
         </View>
 
         {/* Last session */}
@@ -229,21 +378,9 @@ const styles = StyleSheet.create({
     paddingTop: SPACING.xl,
     paddingBottom: SPACING.lg,
   },
-  logo: {
-    fontSize: 32,
-    fontWeight: '900',
-    color: COLORS.accent,
-    letterSpacing: 6,
-  },
-  greeting: {
-    fontSize: FONT_SIZE.sm,
-    color: COLORS.textSecondary,
-    marginTop: 2,
-  },
-  headerRight: {
-    alignItems: 'flex-end',
-    gap: SPACING.sm,
-  },
+  logo: { fontSize: 32, fontWeight: '900', color: COLORS.accent, letterSpacing: 6 },
+  greeting: { fontSize: FONT_SIZE.sm, color: COLORS.textSecondary, marginTop: 2 },
+  headerRight: { alignItems: 'flex-end', gap: SPACING.sm },
   streakBadge: {
     alignItems: 'center',
     backgroundColor: COLORS.accentDim,
@@ -253,11 +390,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: COLORS.accent,
   },
-  streakNumber: {
-    fontSize: FONT_SIZE.xxl,
-    fontWeight: '900',
-    color: COLORS.accent,
-  },
+  streakNumber: { fontSize: FONT_SIZE.xxl, fontWeight: '900', color: COLORS.accent },
   streakLabel: {
     fontSize: FONT_SIZE.xs,
     fontWeight: '700',
@@ -279,10 +412,7 @@ const styles = StyleSheet.create({
     fontStyle: 'italic',
     lineHeight: 22,
   },
-  section: {
-    marginHorizontal: SPACING.xl,
-    marginBottom: SPACING.xl,
-  },
+  section: { marginHorizontal: SPACING.xl, marginBottom: SPACING.xl },
   sectionLabel: {
     fontSize: FONT_SIZE.xs,
     fontWeight: '700',
@@ -302,16 +432,8 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
   },
   todayLeft: { gap: 4 },
-  todayDayLabel: {
-    fontSize: FONT_SIZE.md,
-    fontWeight: '700',
-    color: COLORS.text,
-  },
-  todayStatus: {
-    fontSize: FONT_SIZE.sm,
-    color: COLORS.accent,
-    fontWeight: '600',
-  },
+  todayDayLabel: { fontSize: FONT_SIZE.md, fontWeight: '700', color: COLORS.text },
+  todayStatus: { fontSize: FONT_SIZE.sm, color: COLORS.accent, fontWeight: '600' },
   startButton: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -326,14 +448,116 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: COLORS.border,
   },
-  startButtonText: {
-    fontSize: FONT_SIZE.sm,
-    fontWeight: '800',
-    color: COLORS.background,
+  startButtonText: { fontSize: FONT_SIZE.sm, fontWeight: '800', color: COLORS.background },
+  startButtonTextAlt: { color: COLORS.textSecondary },
+  // Body weight widget
+  bwWidget: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: COLORS.surface,
+    borderRadius: RADIUS.md,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    padding: SPACING.lg,
   },
-  startButtonTextAlt: {
+  bwWidgetLeft: { gap: 2 },
+  bwWeightValue: { fontSize: FONT_SIZE.xxl, fontWeight: '900', color: COLORS.success },
+  bwWeightLabel: { fontSize: FONT_SIZE.xs, color: COLORS.textMuted },
+  bwWidgetRight: { alignItems: 'flex-end', gap: SPACING.xs },
+  bwChange: { fontSize: FONT_SIZE.sm, fontWeight: '700' },
+  bwTrendBadge: { flexDirection: 'row', alignItems: 'center', gap: 3 },
+  bwTrendText: { fontSize: FONT_SIZE.xs, color: COLORS.textSecondary, fontWeight: '600' },
+  bwSeeMore: { fontSize: FONT_SIZE.xs, color: COLORS.accent, fontWeight: '600' },
+  bwWidgetEmpty: { flexDirection: 'row', alignItems: 'center', gap: SPACING.sm },
+  bwEmptyText: { fontSize: FONT_SIZE.sm, color: COLORS.textMuted },
+  // Water widget
+  waterWidget: {
+    backgroundColor: COLORS.surface,
+    borderRadius: RADIUS.md,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    padding: SPACING.lg,
+    gap: SPACING.sm,
+  },
+  waterInfo: {
+    flexDirection: 'row',
+    alignItems: 'baseline',
+    gap: SPACING.xs,
+  },
+  waterAmount: { fontSize: FONT_SIZE.xxl, fontWeight: '900', color: '#4dd0e1' },
+  waterGoal: { fontSize: FONT_SIZE.sm, color: COLORS.textSecondary },
+  waterProgressBar: {
+    height: 8,
+    backgroundColor: COLORS.border,
+    borderRadius: RADIUS.full,
+    overflow: 'hidden',
+  },
+  waterProgressFill: {
+    height: '100%',
+    backgroundColor: '#4dd0e1',
+    borderRadius: RADIUS.full,
+  },
+  waterProgressComplete: { backgroundColor: COLORS.success },
+  waterButtons: {
+    flexDirection: 'row',
+    gap: SPACING.sm,
+    marginTop: SPACING.xs,
+  },
+  waterBtn: {
+    flex: 1,
+    paddingVertical: SPACING.sm,
+    borderRadius: RADIUS.sm,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    backgroundColor: COLORS.surfaceAlt,
+    alignItems: 'center',
+  },
+  waterBtnCustom: {
+    borderColor: COLORS.accent + '40',
+    backgroundColor: COLORS.accentDim,
+  },
+  waterBtnText: {
+    fontSize: FONT_SIZE.sm,
+    fontWeight: '700',
     color: COLORS.textSecondary,
   },
+  waterComplete: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: SPACING.xs,
+    marginTop: SPACING.xs,
+  },
+  waterCompleteText: { fontSize: FONT_SIZE.xs, color: COLORS.success, fontWeight: '600' },
+  // Programme card
+  programmeCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: COLORS.surface,
+    borderRadius: RADIUS.md,
+    borderWidth: 1,
+    borderColor: COLORS.accent + '40',
+    borderLeftWidth: 3,
+    borderLeftColor: COLORS.accent,
+    padding: SPACING.lg,
+    gap: SPACING.md,
+  },
+  programmeLeft: { flex: 1, gap: 3 },
+  programmeTitle: { fontSize: FONT_SIZE.md, fontWeight: '800', color: COLORS.text },
+  programmeSubtitle: {
+    fontSize: FONT_SIZE.sm,
+    color: COLORS.textSecondary,
+    lineHeight: 18,
+  },
+  programmeIcon: {
+    width: 40,
+    height: 40,
+    borderRadius: RADIUS.md,
+    backgroundColor: COLORS.accent,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  // Session card
   sessionCard: {
     backgroundColor: COLORS.surface,
     borderRadius: RADIUS.md,
@@ -346,46 +570,21 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     marginBottom: SPACING.md,
   },
-  sessionDate: {
-    fontSize: FONT_SIZE.md,
-    fontWeight: '700',
-    color: COLORS.text,
-  },
-  sessionDuration: {
-    fontSize: FONT_SIZE.sm,
-    color: COLORS.textSecondary,
-  },
+  sessionDate: { fontSize: FONT_SIZE.md, fontWeight: '700', color: COLORS.text },
+  sessionDuration: { fontSize: FONT_SIZE.sm, color: COLORS.textSecondary },
   exerciseList: { gap: SPACING.sm },
-  exerciseRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-  },
-  exerciseName: {
-    fontSize: FONT_SIZE.sm,
-    color: COLORS.textSecondary,
-    flex: 1,
-  },
-  exerciseWeight: {
-    fontSize: FONT_SIZE.sm,
-    color: COLORS.text,
-    fontWeight: '600',
-  },
-  moreText: {
-    fontSize: FONT_SIZE.sm,
-    color: COLORS.textMuted,
-    marginTop: SPACING.xs,
-  },
+  exerciseRow: { flexDirection: 'row', justifyContent: 'space-between' },
+  exerciseName: { fontSize: FONT_SIZE.sm, color: COLORS.textSecondary, flex: 1 },
+  exerciseWeight: { fontSize: FONT_SIZE.sm, color: COLORS.text, fontWeight: '600' },
+  moreText: { fontSize: FONT_SIZE.sm, color: COLORS.textMuted, marginTop: SPACING.xs },
   sessionCardFooter: {
     marginTop: SPACING.md,
     paddingTop: SPACING.md,
     borderTopWidth: 1,
     borderTopColor: COLORS.border,
   },
-  viewDetails: {
-    fontSize: FONT_SIZE.sm,
-    color: COLORS.accent,
-    fontWeight: '600',
-  },
+  viewDetails: { fontSize: FONT_SIZE.sm, color: COLORS.accent, fontWeight: '600' },
+  // Stats row
   statsRow: {
     flexDirection: 'row',
     marginHorizontal: SPACING.xl,
@@ -401,11 +600,7 @@ const styles = StyleSheet.create({
     padding: SPACING.md,
     alignItems: 'center',
   },
-  statValue: {
-    fontSize: FONT_SIZE.xl,
-    fontWeight: '900',
-    color: COLORS.text,
-  },
+  statValue: { fontSize: FONT_SIZE.xl, fontWeight: '900', color: COLORS.text },
   statLabel: {
     fontSize: FONT_SIZE.xs,
     color: COLORS.textMuted,
@@ -419,14 +614,6 @@ const styles = StyleSheet.create({
     paddingVertical: SPACING.xxl,
     gap: SPACING.sm,
   },
-  emptyText: {
-    fontSize: FONT_SIZE.lg,
-    fontWeight: '700',
-    color: COLORS.textSecondary,
-  },
-  emptySubText: {
-    fontSize: FONT_SIZE.sm,
-    color: COLORS.textMuted,
-    textAlign: 'center',
-  },
+  emptyText: { fontSize: FONT_SIZE.lg, fontWeight: '700', color: COLORS.textSecondary },
+  emptySubText: { fontSize: FONT_SIZE.sm, color: COLORS.textMuted, textAlign: 'center' },
 });
