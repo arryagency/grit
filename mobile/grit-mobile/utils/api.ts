@@ -1,6 +1,7 @@
 import { WorkoutSession } from './storage';
+import { API_BASE } from '@/constants/config';
 
-const BASE_URL = 'http://192.168.1.105:3000';
+const BASE_URL = API_BASE;
 
 export interface ChatMessage {
   role: 'user' | 'assistant';

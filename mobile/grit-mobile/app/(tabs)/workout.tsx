@@ -854,6 +854,7 @@ export default function WorkoutScreen() {
             autoCapitalize="none"
             editable={!quickParsing}
             scrollEnabled={true}
+            multiline={false}
           />
           <TouchableOpacity
             style={[styles.quickLogSend, quickParsing && { opacity: 0.5 }]}

@@ -119,6 +119,76 @@ Only return [] if you truly cannot determine weight OR reps.${contextNote}`,
   }
 });
 
+// POST /api/generate-programme — AI weekly programme builder (SSE streaming)
+app.post('/api/generate-programme', async (req, res) => {
+  const { goal, daysPerWeek, busyDays, trainingTime, sessionDuration } = req.body;
+
+  if (!goal || !daysPerWeek) {
+    return res.status(400).json({ error: 'goal and daysPerWeek are required' });
+  }
+
+  const goalLabels = {
+    strength: 'Strength (bigger lifts, compound focus, progressive overload)',
+    muscle: 'Muscle building (hypertrophy, higher volume)',
+    'fat-loss': 'Fat loss (preserve muscle, higher frequency)',
+    athletic: 'Athletic performance (power, speed, conditioning)',
+  };
+
+  const prompt = `Generate a complete, specific, personalised weekly workout programme based on:
+
+GOAL: ${goalLabels[goal] ?? goal}
+TRAINING DAYS PER WEEK: ${daysPerWeek} days
+BUSY/HARD DAYS: ${busyDays || 'Not specified'}
+USUAL TRAINING TIME: ${trainingTime || 'Not specified'}
+SESSION DURATION: ${sessionDuration ? sessionDuration + ' minutes' : 'Not specified'}
+
+Requirements:
+- Name each training day and structure sessions to avoid heavy lifts on busy days
+- List every exercise with exact sets, reps, and rest periods
+- Include a 5-minute warm-up recommendation per session
+- Explain the weekly structure and the reasoning behind it
+- Add a note for each session on roughly how long it takes
+- Tone: direct, no fluff, no motivational padding — just the programme
+
+Format with clear headers for each day.`;
+
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+  res.flushHeaders();
+
+  try {
+    const stream = anthropic.messages.stream({
+      model: 'claude-opus-4-6',
+      max_tokens: 4096,
+      system: 'You are an expert strength and conditioning coach. Generate complete, specific, actionable workout programmes. Be concise but thorough — include all exercises, sets, reps, rest periods. No fluff.',
+      messages: [{ role: 'user', content: prompt }],
+    });
+
+    stream.on('text', (text) => {
+      res.write(`data: ${JSON.stringify({ type: 'delta', text })}\n\n`);
+    });
+
+    stream.on('error', (err) => {
+      console.error('Programme stream error:', err);
+      res.write(`data: ${JSON.stringify({ type: 'error', message: err.message })}\n\n`);
+      res.end();
+    });
+
+    await stream.finalMessage();
+    res.write(`data: ${JSON.stringify({ type: 'done' })}\n\n`);
+    res.end();
+  } catch (err) {
+    console.error('Programme error:', err);
+    if (!res.headersSent) {
+      res.status(500).json({ error: err.message });
+    } else {
+      res.write(`data: ${JSON.stringify({ type: 'error', message: err.message })}\n\n`);
+      res.end();
+    }
+  }
+});
+
 // Health check
 app.get('/health', (_req, res) => res.json({ status: 'ok', service: 'GRIT' }));
 

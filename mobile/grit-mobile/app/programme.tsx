@@ -14,8 +14,7 @@ import { useState, useRef } from 'react';
 import { router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { COLORS, SPACING, FONT_SIZE, RADIUS } from '@/constants/theme';
-
-const API_BASE = 'http://192.168.1.105:3000';
+import { API_BASE } from '@/constants/config';
 
 type Goal = 'strength' | 'muscle' | 'fat-loss' | 'athletic';
 type TrainingDays = 1 | 2 | 3 | 4 | 5 | 6;
@@ -81,39 +80,16 @@ export default function ProgrammeScreen() {
     setError('');
     setProgramme('');
 
-    const goalLabels: Record<Goal, string> = {
-      strength: 'Strength (bigger lifts)',
-      muscle: 'Muscle building (hypertrophy)',
-      'fat-loss': 'Fat loss (while preserving muscle)',
-      athletic: 'Athletic performance',
-    };
-
-    const prompt = `Generate a complete, specific, personalised weekly workout programme for me based on my information:
-
-GOAL: ${goalLabels[answers.goal!]}
-TRAINING DAYS PER WEEK: ${answers.daysPerWeek} days
-BUSY/HARD DAYS: ${answers.busyDays}
-USUAL TRAINING TIME: ${answers.trainingTime}
-SESSION DURATION: ${answers.sessionDuration} minutes available
-
-Requirements:
-- Build the programme around my schedule (avoid heavy sessions on my busy days)
-- Be specific: name each day, list exercises with sets and reps
-- Include warm-up recommendations
-- Explain the weekly structure and why you chose it
-- For each session, note roughly how long it should take
-- If I only have 30 minutes on a day, suggest a condensed version I can do
-- Keep the tone direct and practical, no fluff
-
-Format it clearly with headers for each training day.`;
-
     try {
-      const response = await fetch(`${API_BASE}/api/chat`, {
+      const response = await fetch(`${API_BASE}/api/generate-programme`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          messages: [{ role: 'user', content: prompt }],
-          workoutHistory: [],
+          goal: answers.goal,
+          daysPerWeek: answers.daysPerWeek,
+          busyDays: answers.busyDays,
+          trainingTime: answers.trainingTime,
+          sessionDuration: answers.sessionDuration,
         }),
       });
 
