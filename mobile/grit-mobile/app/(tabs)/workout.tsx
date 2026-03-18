@@ -13,10 +13,13 @@ import {
   Platform,
   Animated,
   Easing,
+  Linking,
+  Share,
 } from 'react-native';
 import { useState, useCallback, useRef, useEffect } from 'react';
 import { useFocusEffect, router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
+import * as Haptics from 'expo-haptics';
 import {
   getSessions,
   saveSession,
@@ -26,6 +29,11 @@ import {
   SetLog,
   generateId,
   getLastSessionForExercise,
+  getSettings,
+  getTemplates,
+  saveTemplate,
+  deleteTemplate,
+  WorkoutTemplate,
 } from '@/utils/storage';
 import { getSuggestion, parseQuickLog, getMissingPieceQuestion } from '@/utils/progressiveOverload';
 import { parseLogWithClaude } from '@/utils/api';
@@ -80,6 +88,7 @@ export default function WorkoutScreen() {
   const [showExerciseModal, setShowExerciseModal] = useState(false);
   const [search, setSearch] = useState('');
   const [saving, setSaving] = useState(false);
+  const [templates, setTemplates] = useState<WorkoutTemplate[]>([]);
 
   // Quick log
   const [quickText, setQuickText] = useState('');
@@ -99,9 +108,83 @@ export default function WorkoutScreen() {
   const prScale = useRef(new Animated.Value(0.4)).current;
   const prOpacity = useRef(new Animated.Value(0)).current;
 
+  // ─── Rest Timer ─────────────────────────────────────────────────────────────
+  const [restTimerActive, setRestTimerActive] = useState(false);
+  const [restRemaining, setRestRemaining] = useState(180);
+  const [restTimerDefault, setRestTimerDefault] = useState(180);
+  const restIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const restCompleteScale = useRef(new Animated.Value(1)).current;
+
+  useEffect(() => {
+    getSettings().then((s) => {
+      setRestTimerDefault(s.restTimerDefault);
+      setRestRemaining(s.restTimerDefault);
+    });
+    return () => {
+      if (restIntervalRef.current) clearInterval(restIntervalRef.current);
+    };
+  }, []);
+
+  function startRestTimer() {
+    if (restIntervalRef.current) clearInterval(restIntervalRef.current);
+    setRestRemaining(restTimerDefault);
+    setRestTimerActive(true);
+
+    restIntervalRef.current = setInterval(() => {
+      setRestRemaining((prev) => {
+        if (prev <= 1) {
+          clearInterval(restIntervalRef.current!);
+          setRestTimerActive(false);
+          onRestComplete();
+          return 0;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+  }
+
+  function skipRestTimer() {
+    if (restIntervalRef.current) clearInterval(restIntervalRef.current);
+    setRestTimerActive(false);
+  }
+
+  function onRestComplete() {
+    // Multiple haptic pulses to get attention
+    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    setTimeout(() => Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success), 350);
+    setTimeout(() => Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success), 700);
+    setTimeout(() => Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy), 1100);
+
+    // Schedule an immediate notification for the sound
+    try {
+      const Notifications = require('expo-notifications');
+      Notifications.scheduleNotificationAsync({
+        content: { title: 'GRIT', body: 'Rest complete. Get back under the bar.' },
+        trigger: null,
+      });
+    } catch (_) {}
+
+    // Pulse animation
+    Animated.sequence([
+      Animated.timing(restCompleteScale, { toValue: 1.15, duration: 150, useNativeDriver: true }),
+      Animated.timing(restCompleteScale, { toValue: 1, duration: 150, useNativeDriver: true }),
+      Animated.timing(restCompleteScale, { toValue: 1.1, duration: 100, useNativeDriver: true }),
+      Animated.timing(restCompleteScale, { toValue: 1, duration: 100, useNativeDriver: true }),
+    ]).start();
+  }
+
+  function formatRestTime(secs: number): string {
+    const m = Math.floor(secs / 60);
+    const s = secs % 60;
+    return `${m}:${s.toString().padStart(2, '0')}`;
+  }
+
+  // ─── Data Loading ────────────────────────────────────────────────────────────
+
   useFocusEffect(
     useCallback(() => {
       getSessions().then(setAllSessions);
+      getTemplates().then(setTemplates);
     }, [])
   );
 
@@ -136,6 +219,25 @@ export default function WorkoutScreen() {
       id: generateId(),
       date: new Date().toISOString(),
       exercises: [],
+      duration: 0,
+      notes: '',
+    });
+  }
+
+  // ─── Template Load ───────────────────────────────────────────────────────────
+
+  function loadTemplate(template: WorkoutTemplate) {
+    setStartTime(new Date());
+    setIsActive(true);
+    setSession({
+      id: generateId(),
+      date: new Date().toISOString(),
+      exercises: template.exercises.map((te) => ({
+        name: te.name,
+        sets: Array.from({ length: te.sets }, () =>
+          emptySet(te.defaultWeight, te.defaultReps)
+        ),
+      })),
       duration: 0,
       notes: '',
     });
@@ -223,11 +325,18 @@ export default function WorkoutScreen() {
       const exercises = [...prev.exercises];
       const ex = { ...exercises[exIdx] };
       const sets = [...ex.sets];
-      sets[setIdx] = { ...sets[setIdx], completed: !sets[setIdx].completed };
+      const wasCompleted = sets[setIdx].completed;
+      sets[setIdx] = { ...sets[setIdx], completed: !wasCompleted };
       ex.sets = sets;
       exercises[exIdx] = ex;
       return { ...prev, exercises };
     });
+
+    // Start rest timer when set is marked as complete
+    const willBeCompleted = !session.exercises[exIdx]?.sets[setIdx]?.completed;
+    if (willBeCompleted) {
+      startRestTimer();
+    }
   }
 
   // ─── Quick Log ──────────────────────────────────────────────────────────────
@@ -289,6 +398,14 @@ export default function WorkoutScreen() {
         }
       });
     }
+    startRestTimer();
+  }
+
+  // ─── Form Tutorial ───────────────────────────────────────────────────────────
+
+  function watchForm(exerciseName: string) {
+    const query = encodeURIComponent(`${exerciseName} proper form technique`);
+    Linking.openURL(`https://www.youtube.com/results?search_query=${query}`);
   }
 
   // ─── Finish / Discard ───────────────────────────────────────────────────────
@@ -310,11 +427,13 @@ export default function WorkoutScreen() {
       await saveSession(finalSession);
       const newPRs = await updatePRs(finalSession);
 
+      // Stop rest timer
+      if (restIntervalRef.current) clearInterval(restIntervalRef.current);
+      setRestTimerActive(false);
       setIsActive(false);
       setAllSessions(await getSessions());
 
       if (newPRs.length > 0) {
-        // Show PR overlay briefly then navigate to summary
         setPrOverlay(newPRs);
         Animated.parallel([
           Animated.spring(prScale, { toValue: 1, useNativeDriver: true, tension: 60, friction: 7 }),
@@ -338,7 +457,15 @@ export default function WorkoutScreen() {
   function discardWorkout() {
     Alert.alert('Discard session?', 'All logged sets will be lost.', [
       { text: 'Cancel', style: 'cancel' },
-      { text: 'Discard', style: 'destructive', onPress: () => setIsActive(false) },
+      {
+        text: 'Discard',
+        style: 'destructive',
+        onPress: () => {
+          if (restIntervalRef.current) clearInterval(restIntervalRef.current);
+          setRestTimerActive(false);
+          setIsActive(false);
+        },
+      },
     ]);
   }
 
@@ -347,7 +474,15 @@ export default function WorkoutScreen() {
   if (!isActive) {
     return (
       <>
-        <IdleScreen onStart={onPressStart} sessions={allSessions} />
+        <IdleScreen
+          onStart={onPressStart}
+          sessions={allSessions}
+          templates={templates}
+          onLoadTemplate={loadTemplate}
+          onDeleteTemplate={(id) => {
+            deleteTemplate(id).then(() => getTemplates().then(setTemplates));
+          }}
+        />
         <CheckInModal
           visible={showCheckIn}
           checkIn={checkIn}
@@ -380,6 +515,57 @@ export default function WorkoutScreen() {
           </TouchableOpacity>
         </View>
 
+        {/* Rest Timer Banner */}
+        {restTimerActive && (
+          <Animated.View
+            style={[
+              styles.restTimerBanner,
+              { transform: [{ scale: restCompleteScale }] },
+              restRemaining <= 10 && styles.restTimerBannerUrgent,
+            ]}
+          >
+            <View style={styles.restTimerLeft}>
+              <Ionicons
+                name="timer-outline"
+                size={20}
+                color={restRemaining <= 10 ? COLORS.warning : COLORS.accent}
+              />
+              <Text style={styles.restTimerLabel}>REST</Text>
+            </View>
+            <Text
+              style={[
+                styles.restTimerCount,
+                restRemaining <= 10 && { color: COLORS.warning },
+              ]}
+            >
+              {formatRestTime(restRemaining)}
+            </Text>
+            <View style={styles.restTimerRight}>
+              <View style={styles.restProgressBar}>
+                <View
+                  style={[
+                    styles.restProgressFill,
+                    {
+                      width: `${((restTimerDefault - restRemaining) / restTimerDefault) * 100}%`,
+                      backgroundColor: restRemaining <= 10 ? COLORS.warning : COLORS.accent,
+                    },
+                  ]}
+                />
+              </View>
+              <TouchableOpacity onPress={skipRestTimer} style={styles.restSkipBtn}>
+                <Text style={styles.restSkipText}>Skip</Text>
+              </TouchableOpacity>
+            </View>
+          </Animated.View>
+        )}
+
+        {restTimerActive === false && restRemaining === 0 && (
+          <View style={styles.restReadyBanner}>
+            <Ionicons name="checkmark-circle" size={18} color={COLORS.success} />
+            <Text style={styles.restReadyText}>Rest done. Back to work.</Text>
+          </View>
+        )}
+
         <ScrollView showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
           {session.exercises.map((ex, exIdx) => {
             const lastEx = getLastSessionForExercise(ex.name, allSessions);
@@ -388,9 +574,19 @@ export default function WorkoutScreen() {
               <View key={exIdx} style={styles.exerciseCard}>
                 <View style={styles.exHeader}>
                   <Text style={styles.exName}>{ex.name}</Text>
-                  <TouchableOpacity onPress={() => removeExercise(exIdx)}>
-                    <Ionicons name="close" size={20} color={COLORS.textMuted} />
-                  </TouchableOpacity>
+                  <View style={styles.exHeaderActions}>
+                    {/* Watch form button */}
+                    <TouchableOpacity
+                      style={styles.watchFormBtn}
+                      onPress={() => watchForm(ex.name)}
+                    >
+                      <Ionicons name="play-circle-outline" size={14} color={COLORS.textSecondary} />
+                      <Text style={styles.watchFormText}>Watch form</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity onPress={() => removeExercise(exIdx)}>
+                      <Ionicons name="close" size={20} color={COLORS.textMuted} />
+                    </TouchableOpacity>
+                  </View>
                 </View>
 
                 {lastEx && (
@@ -751,8 +947,35 @@ function SetRow({
 
 // ─── Idle Screen ─────────────────────────────────────────────────────────────
 
-function IdleScreen({ onStart, sessions }: { onStart: () => void; sessions: WorkoutSession[] }) {
+interface IdleScreenProps {
+  onStart: () => void;
+  sessions: WorkoutSession[];
+  templates: WorkoutTemplate[];
+  onLoadTemplate: (t: WorkoutTemplate) => void;
+  onDeleteTemplate: (id: string) => void;
+}
+
+function IdleScreen({ onStart, sessions, templates, onLoadTemplate, onDeleteTemplate }: IdleScreenProps) {
   const lastSession = sessions[0];
+
+  function confirmLoadTemplate(t: WorkoutTemplate) {
+    Alert.alert(
+      `Load "${t.name}"`,
+      `Load ${t.exercises.length} exercise${t.exercises.length !== 1 ? 's' : ''} and start?`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Load & Start', onPress: () => onLoadTemplate(t) },
+      ]
+    );
+  }
+
+  function confirmDeleteTemplate(t: WorkoutTemplate) {
+    Alert.alert('Delete template?', `"${t.name}" will be permanently removed.`, [
+      { text: 'Cancel', style: 'cancel' },
+      { text: 'Delete', style: 'destructive', onPress: () => onDeleteTemplate(t.id) },
+    ]);
+  }
+
   return (
     <SafeAreaView style={styles.container}>
       <ScrollView showsVerticalScrollIndicator={false}>
@@ -775,6 +998,42 @@ function IdleScreen({ onStart, sessions }: { onStart: () => void; sessions: Work
             During a session: type <Text style={{ color: COLORS.accent }}>bench 80 4x8</Text> to log instantly
           </Text>
         </View>
+
+        {/* Templates section */}
+        {templates.length > 0 && (
+          <View style={styles.section}>
+            <Text style={styles.sectionLabel}>Templates</Text>
+            {templates.map((t) => (
+              <View key={t.id} style={styles.templateCard}>
+                <TouchableOpacity
+                  style={styles.templateMain}
+                  onPress={() => confirmLoadTemplate(t)}
+                  activeOpacity={0.7}
+                >
+                  <View style={styles.templateLeft}>
+                    <Text style={styles.templateName}>{t.name}</Text>
+                    <Text style={styles.templateMeta}>
+                      {t.exercises.map((e) => e.name).join(', ')}
+                    </Text>
+                    <Text style={styles.templateCount}>
+                      {t.exercises.length} exercise{t.exercises.length !== 1 ? 's' : ''}
+                    </Text>
+                  </View>
+                  <View style={styles.loadBtn}>
+                    <Ionicons name="play" size={14} color={COLORS.background} />
+                    <Text style={styles.loadBtnText}>Load</Text>
+                  </View>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={styles.templateDelete}
+                  onPress={() => confirmDeleteTemplate(t)}
+                >
+                  <Ionicons name="trash-outline" size={16} color={COLORS.textMuted} />
+                </TouchableOpacity>
+              </View>
+            ))}
+          </View>
+        )}
 
         {lastSession && (
           <View style={styles.section}>
@@ -855,7 +1114,7 @@ const styles = StyleSheet.create({
     gap: SPACING.sm,
   },
   quickHintText: { fontSize: FONT_SIZE.xs, color: COLORS.textSecondary, flex: 1 },
-  section: { marginHorizontal: SPACING.xl, gap: SPACING.sm },
+  section: { marginHorizontal: SPACING.xl, gap: SPACING.sm, marginBottom: SPACING.xl },
   sectionLabel: {
     fontSize: FONT_SIZE.xs,
     fontWeight: '700',
@@ -864,6 +1123,47 @@ const styles = StyleSheet.create({
     textTransform: 'uppercase',
     marginBottom: SPACING.xs,
   },
+  // Templates
+  templateCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: COLORS.surface,
+    borderRadius: RADIUS.md,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    overflow: 'hidden',
+  },
+  templateMain: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: SPACING.md,
+    gap: SPACING.sm,
+  },
+  templateLeft: { flex: 1, gap: 2 },
+  templateName: { fontSize: FONT_SIZE.md, fontWeight: '800', color: COLORS.text },
+  templateMeta: {
+    fontSize: FONT_SIZE.xs,
+    color: COLORS.textSecondary,
+    numberOfLines: 1,
+  } as any,
+  templateCount: { fontSize: FONT_SIZE.xs, color: COLORS.textMuted },
+  loadBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: COLORS.accent,
+    paddingHorizontal: SPACING.md,
+    paddingVertical: SPACING.sm,
+    borderRadius: RADIUS.sm,
+  },
+  loadBtnText: { fontSize: FONT_SIZE.xs, fontWeight: '800', color: COLORS.background },
+  templateDelete: {
+    padding: SPACING.md,
+    borderLeftWidth: 1,
+    borderLeftColor: COLORS.border,
+  },
+  // Last session
   lastExCard: {
     backgroundColor: COLORS.surface,
     borderRadius: RADIUS.md,
@@ -877,6 +1177,7 @@ const styles = StyleSheet.create({
   nextBadge: { backgroundColor: COLORS.border, borderRadius: RADIUS.xs, paddingHorizontal: 6, paddingVertical: 2 },
   lastExSuggestion: { fontSize: FONT_SIZE.xs, fontWeight: '700', color: COLORS.textSecondary },
   lastExSets: { fontSize: FONT_SIZE.sm, color: COLORS.textSecondary },
+  // Active header
   activeHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
@@ -895,6 +1196,84 @@ const styles = StyleSheet.create({
     borderRadius: RADIUS.full,
   },
   finishButtonText: { fontSize: FONT_SIZE.sm, fontWeight: '800', color: COLORS.background },
+  // Rest timer
+  restTimerBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: SPACING.lg,
+    paddingVertical: SPACING.sm,
+    backgroundColor: COLORS.accentDim,
+    borderBottomWidth: 1,
+    borderBottomColor: COLORS.accent + '40',
+    gap: SPACING.sm,
+  },
+  restTimerBannerUrgent: {
+    backgroundColor: 'rgba(255,136,0,0.12)',
+    borderBottomColor: COLORS.warning + '40',
+  },
+  restTimerLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+  },
+  restTimerLabel: {
+    fontSize: FONT_SIZE.xs,
+    fontWeight: '800',
+    color: COLORS.accent,
+    letterSpacing: 2,
+  },
+  restTimerCount: {
+    fontSize: 32,
+    fontWeight: '900',
+    color: COLORS.accent,
+    fontVariant: ['tabular-nums'],
+    minWidth: 70,
+    textAlign: 'center',
+  },
+  restTimerRight: {
+    flex: 1,
+    gap: SPACING.xs,
+    alignItems: 'flex-end',
+  },
+  restProgressBar: {
+    width: '100%',
+    height: 4,
+    backgroundColor: COLORS.border,
+    borderRadius: RADIUS.full,
+    overflow: 'hidden',
+  },
+  restProgressFill: {
+    height: '100%',
+    borderRadius: RADIUS.full,
+  },
+  restSkipBtn: {
+    paddingHorizontal: SPACING.sm,
+    paddingVertical: 2,
+    borderRadius: RADIUS.sm,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+  },
+  restSkipText: {
+    fontSize: FONT_SIZE.xs,
+    color: COLORS.textSecondary,
+    fontWeight: '600',
+  },
+  restReadyBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: SPACING.sm,
+    paddingHorizontal: SPACING.lg,
+    paddingVertical: SPACING.sm,
+    backgroundColor: 'rgba(0,204,68,0.1)',
+    borderBottomWidth: 1,
+    borderBottomColor: 'rgba(0,204,68,0.2)',
+  },
+  restReadyText: {
+    fontSize: FONT_SIZE.sm,
+    fontWeight: '700',
+    color: COLORS.success,
+  },
+  // Exercise card
   exerciseCard: {
     marginHorizontal: SPACING.lg,
     marginTop: SPACING.lg,
@@ -911,6 +1290,27 @@ const styles = StyleSheet.create({
     marginBottom: SPACING.xs,
   },
   exName: { fontSize: FONT_SIZE.md, fontWeight: '800', color: COLORS.text, flex: 1 },
+  exHeaderActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: SPACING.sm,
+  },
+  watchFormBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
+    paddingHorizontal: SPACING.sm,
+    paddingVertical: 3,
+    backgroundColor: COLORS.surfaceAlt,
+    borderRadius: RADIUS.xs,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+  },
+  watchFormText: {
+    fontSize: 10,
+    color: COLORS.textSecondary,
+    fontWeight: '600',
+  },
   prevLabel: { fontSize: FONT_SIZE.xs, color: COLORS.textMuted, marginBottom: SPACING.xs },
   suggestionRow: {
     flexDirection: 'row',

@@ -5,11 +5,22 @@ import {
   StyleSheet,
   TouchableOpacity,
   SafeAreaView,
+  Share,
+  Alert,
+  TextInput,
+  Modal,
 } from 'react-native';
 import { useLocalSearchParams, router } from 'expo-router';
 import { useState, useEffect } from 'react';
 import { Ionicons } from '@expo/vector-icons';
-import { getSessions, getWeeklyVolume, WorkoutSession } from '@/utils/storage';
+import {
+  getSessions,
+  getWeeklyVolume,
+  WorkoutSession,
+  getTemplates,
+  saveTemplate,
+  generateId,
+} from '@/utils/storage';
 import { getSessionComment } from '@/utils/progressiveOverload';
 import { COLORS, SPACING, FONT_SIZE, RADIUS } from '@/constants/theme';
 
@@ -17,6 +28,9 @@ export default function SessionSummaryScreen() {
   const { sessionId, prs } = useLocalSearchParams<{ sessionId: string; prs: string }>();
   const [session, setSession] = useState<WorkoutSession | null>(null);
   const [weekVolume, setWeekVolume] = useState<{ current: number; best: number }>({ current: 0, best: 0 });
+  const [showSaveTemplate, setShowSaveTemplate] = useState(false);
+  const [templateName, setTemplateName] = useState('');
+  const [templateSaved, setTemplateSaved] = useState(false);
 
   useEffect(() => {
     getSessions().then((sessions) => {
@@ -52,8 +66,6 @@ export default function SessionSummaryScreen() {
     newPRsCount
   );
 
-  // Weekly volume PR check — current week > previous best (before this session's week)
-  // weekVolume.current includes today; if it equals best, this week is the new best
   const weeklyPR = weekVolume.current > 0 && weekVolume.current >= weekVolume.best;
 
   const volumeDisplay = totalVolume >= 1000
@@ -62,6 +74,87 @@ export default function SessionSummaryScreen() {
 
   function done() {
     router.replace('/(tabs)');
+  }
+
+  // ─── Share ─────────────────────────────────────────────────────────────────
+
+  async function shareSession() {
+    const exerciseLines = session!.exercises.map((ex) => {
+      const doneSets = ex.sets.filter((s) => s.completed && s.weight > 0);
+      if (doneSets.length === 0) return null;
+      const setsStr = doneSets.map((s) => `${s.weight}kg×${s.reps}`).join('  ');
+      return `${ex.name} — ${setsStr}`;
+    }).filter(Boolean);
+
+    const dateStr = new Date(session!.date).toLocaleDateString('en-GB', {
+      weekday: 'long', day: 'numeric', month: 'long',
+    });
+
+    const prLine = newPRsCount > 0
+      ? `\n🏆 ${newPRsCount} new PR${newPRsCount !== 1 ? 's' : ''}`
+      : '';
+
+    const durationLine = session!.duration > 0 ? `⏱ ${session!.duration} min` : '';
+
+    const shareText = [
+      `💪 GRIT — ${dateStr}`,
+      `${'─'.repeat(30)}`,
+      ...exerciseLines,
+      `${'─'.repeat(30)}`,
+      `📊 Volume: ${volumeDisplay}  |  Sets: ${completedSets}${durationLine ? `  |  ${durationLine}` : ''}${prLine}`,
+      ``,
+      `Logged with GRIT`,
+    ].join('\n');
+
+    try {
+      await Share.share({ message: shareText });
+    } catch (e: any) {
+      console.log('[GRIT] Share failed:', e?.message);
+    }
+  }
+
+  // ─── Save as template ──────────────────────────────────────────────────────
+
+  async function handleSaveTemplate() {
+    const name = templateName.trim();
+    if (!name) {
+      Alert.alert('Name required', 'Give this template a name.');
+      return;
+    }
+
+    const templates = await getTemplates();
+    const nameExists = templates.some(
+      (t) => t.name.toLowerCase() === name.toLowerCase()
+    );
+    if (nameExists) {
+      Alert.alert('Name taken', 'A template with that name already exists. Choose another.');
+      return;
+    }
+
+    await saveTemplate({
+      id: generateId(),
+      name,
+      createdAt: new Date().toISOString(),
+      exercises: session!.exercises.map((ex) => {
+        const completedSetsForEx = ex.sets.filter((s) => s.completed && s.weight > 0);
+        const avgWeight = completedSetsForEx.length > 0
+          ? Math.round(completedSetsForEx.reduce((s, set) => s + set.weight, 0) / completedSetsForEx.length)
+          : 0;
+        const avgReps = completedSetsForEx.length > 0
+          ? Math.round(completedSetsForEx.reduce((s, set) => s + set.reps, 0) / completedSetsForEx.length)
+          : 8;
+        return {
+          name: ex.name,
+          defaultWeight: avgWeight,
+          defaultReps: avgReps,
+          sets: Math.max(ex.sets.filter((s) => s.completed).length, 1),
+        };
+      }),
+    });
+
+    setTemplateSaved(true);
+    setShowSaveTemplate(false);
+    setTemplateName('');
   }
 
   return (
@@ -134,6 +227,29 @@ export default function SessionSummaryScreen() {
           })}
         </View>
 
+        {/* Action buttons */}
+        <View style={styles.actionRow}>
+          <TouchableOpacity style={styles.shareBtn} onPress={shareSession}>
+            <Ionicons name="share-outline" size={18} color={COLORS.text} />
+            <Text style={styles.shareBtnText}>Share</Text>
+          </TouchableOpacity>
+          {!templateSaved && (
+            <TouchableOpacity
+              style={styles.templateBtn}
+              onPress={() => setShowSaveTemplate(true)}
+            >
+              <Ionicons name="bookmark-outline" size={18} color={COLORS.text} />
+              <Text style={styles.templateBtnText}>Save as template</Text>
+            </TouchableOpacity>
+          )}
+          {templateSaved && (
+            <View style={styles.templateSavedBadge}>
+              <Ionicons name="checkmark-circle" size={16} color={COLORS.success} />
+              <Text style={styles.templateSavedText}>Template saved</Text>
+            </View>
+          )}
+        </View>
+
         {/* Done button */}
         <TouchableOpacity style={styles.doneButton} onPress={done}>
           <Text style={styles.doneButtonText}>Done</Text>
@@ -141,6 +257,38 @@ export default function SessionSummaryScreen() {
 
         <View style={{ height: SPACING.xxl }} />
       </ScrollView>
+
+      {/* Save as template modal */}
+      <Modal visible={showSaveTemplate} animationType="slide" presentationStyle="pageSheet" transparent>
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalSheet}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Save as template</Text>
+              <TouchableOpacity onPress={() => { setShowSaveTemplate(false); setTemplateName(''); }}>
+                <Ionicons name="close" size={22} color={COLORS.text} />
+              </TouchableOpacity>
+            </View>
+            <Text style={styles.modalSubtitle}>
+              {session.exercises.length} exercise{session.exercises.length !== 1 ? 's' : ''} will be saved.
+              Load it next time to start instantly.
+            </Text>
+            <TextInput
+              style={styles.templateNameInput}
+              value={templateName}
+              onChangeText={setTemplateName}
+              placeholder="e.g. Chest Day, Push A, Monday Session"
+              placeholderTextColor={COLORS.textMuted}
+              autoFocus
+              returnKeyType="done"
+              onSubmitEditing={handleSaveTemplate}
+              maxLength={40}
+            />
+            <TouchableOpacity style={styles.saveBtn} onPress={handleSaveTemplate}>
+              <Text style={styles.saveBtnText}>Save template</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -184,11 +332,7 @@ const styles = StyleSheet.create({
     lineHeight: 26,
     fontStyle: 'italic',
   },
-  statsRow: {
-    flexDirection: 'row',
-    gap: SPACING.sm,
-    marginBottom: SPACING.md,
-  },
+  statsRow: { flexDirection: 'row', gap: SPACING.sm, marginBottom: SPACING.md },
   statBox: {
     flex: 1,
     backgroundColor: COLORS.surface,
@@ -263,12 +407,102 @@ const styles = StyleSheet.create({
   exSets: { fontSize: FONT_SIZE.xs, color: COLORS.textSecondary },
   exTop: { fontSize: FONT_SIZE.md, fontWeight: '900', color: COLORS.accent },
   exVol: { fontSize: FONT_SIZE.xs, color: COLORS.textMuted },
+  // Action buttons
+  actionRow: {
+    flexDirection: 'row',
+    gap: SPACING.sm,
+    marginTop: SPACING.xl,
+  },
+  shareBtn: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: SPACING.sm,
+    backgroundColor: COLORS.surface,
+    borderRadius: RADIUS.md,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    paddingVertical: SPACING.md,
+  },
+  shareBtnText: { fontSize: FONT_SIZE.sm, fontWeight: '700', color: COLORS.text },
+  templateBtn: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: SPACING.sm,
+    backgroundColor: COLORS.surface,
+    borderRadius: RADIUS.md,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    paddingVertical: SPACING.md,
+  },
+  templateBtnText: { fontSize: FONT_SIZE.sm, fontWeight: '700', color: COLORS.text },
+  templateSavedBadge: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: SPACING.xs,
+    backgroundColor: 'rgba(0,204,68,0.1)',
+    borderRadius: RADIUS.md,
+    borderWidth: 1,
+    borderColor: 'rgba(0,204,68,0.3)',
+    paddingVertical: SPACING.md,
+  },
+  templateSavedText: { fontSize: FONT_SIZE.sm, fontWeight: '700', color: COLORS.success },
+  // Done button
   doneButton: {
     backgroundColor: COLORS.accent,
     borderRadius: RADIUS.md,
     paddingVertical: SPACING.lg,
     alignItems: 'center',
-    marginTop: SPACING.xxl,
+    marginTop: SPACING.lg,
   },
   doneButtonText: { fontSize: FONT_SIZE.lg, fontWeight: '900', color: COLORS.background },
+  // Modal
+  modalOverlay: {
+    flex: 1,
+    justifyContent: 'flex-end',
+    backgroundColor: 'rgba(0,0,0,0.6)',
+  },
+  modalSheet: {
+    backgroundColor: COLORS.surface,
+    borderTopLeftRadius: RADIUS.lg,
+    borderTopRightRadius: RADIUS.lg,
+    padding: SPACING.xl,
+    paddingBottom: SPACING.xxl,
+    gap: SPACING.md,
+    borderTopWidth: 1,
+    borderTopColor: COLORS.border,
+  },
+  modalHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  modalTitle: { fontSize: FONT_SIZE.xl, fontWeight: '800', color: COLORS.text },
+  modalSubtitle: {
+    fontSize: FONT_SIZE.sm,
+    color: COLORS.textSecondary,
+    lineHeight: 20,
+  },
+  templateNameInput: {
+    backgroundColor: COLORS.surfaceAlt,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    borderRadius: RADIUS.md,
+    paddingHorizontal: SPACING.lg,
+    paddingVertical: SPACING.md,
+    fontSize: FONT_SIZE.md,
+    color: COLORS.text,
+  },
+  saveBtn: {
+    backgroundColor: COLORS.accent,
+    borderRadius: RADIUS.md,
+    paddingVertical: SPACING.md,
+    alignItems: 'center',
+  },
+  saveBtnText: { fontSize: FONT_SIZE.md, fontWeight: '800', color: COLORS.background },
 });
