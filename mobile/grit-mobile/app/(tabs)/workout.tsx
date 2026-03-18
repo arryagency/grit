@@ -20,6 +20,7 @@ import { useState, useCallback, useRef, useEffect } from 'react';
 import { useFocusEffect, router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import {
   getSessions,
   saveSession,
@@ -96,8 +97,23 @@ export default function WorkoutScreen() {
   const [quickParsing, setQuickParsing] = useState(false);
   // Track last-logged exercise so we can show a running set list
   const [lastLoggedExercise, setLastLoggedExercise] = useState<string | null>(null);
+  // Per-exercise memory: last logged weight/reps for context-aware parsing
+  const [lastLoggedWeights, setLastLoggedWeights] = useState<Record<string, number>>({});
+  const [lastLoggedRepsMap, setLastLoggedRepsMap] = useState<Record<string, number>>({});
   // Rotating placeholder text
   const [placeholderIdx, setPlaceholderIdx] = useState(0);
+
+  // Session timer
+  const [sessionTimerMins, setSessionTimerMins] = useState<number | null>(null);
+  const [sessionTimerSecs, setSessionTimerSecs] = useState(0);
+  const [sessionTimerActive, setSessionTimerActive] = useState(false);
+  const [showTimerPicker, setShowTimerPicker] = useState(false);
+  const [customTimerInput, setCustomTimerInput] = useState('');
+  const sessionTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const sessionFiveNotified = useRef(false);
+
+  // Volume tooltip (shown once, then comparison mode)
+  const [hasSeenVolume, setHasSeenVolume] = useState(false);
 
   // Check-in
   const [showCheckIn, setShowCheckIn] = useState(false);
@@ -120,8 +136,12 @@ export default function WorkoutScreen() {
       setRestTimerDefault(s.restTimerDefault);
       setRestRemaining(s.restTimerDefault);
     });
+    AsyncStorage.getItem('@grit/hasSeenVolumeTooltip').then((v) => {
+      if (v === 'true') setHasSeenVolume(true);
+    });
     return () => {
       if (restIntervalRef.current) clearInterval(restIntervalRef.current);
+      if (sessionTimerRef.current) clearInterval(sessionTimerRef.current);
     };
   }, []);
 
@@ -179,6 +199,72 @@ export default function WorkoutScreen() {
     return `${m}:${s.toString().padStart(2, '0')}`;
   }
 
+  // ─── Session Timer ───────────────────────────────────────────────────────────
+
+  function startSessionTimer(mins: number) {
+    if (sessionTimerRef.current) clearInterval(sessionTimerRef.current);
+    setSessionTimerMins(mins);
+    setSessionTimerSecs(mins * 60);
+    setSessionTimerActive(true);
+    sessionFiveNotified.current = false;
+    sessionTimerRef.current = setInterval(() => {
+      setSessionTimerSecs((prev) => {
+        if (prev === 5 * 60 + 1 && !sessionFiveNotified.current) {
+          sessionFiveNotified.current = true;
+          Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+          try {
+            const Notifications = require('expo-notifications');
+            Notifications.scheduleNotificationAsync({
+              content: { title: 'GRIT', body: '5 minutes left in your session.' },
+              trigger: null,
+            });
+          } catch (_) {}
+        }
+        if (prev <= 1) {
+          clearInterval(sessionTimerRef.current!);
+          setSessionTimerActive(false);
+          Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
+          setTimeout(() => Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning), 400);
+          Alert.alert("Time's up", "Wrap it up. Log your final sets and finish.");
+          return 0;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+  }
+
+  function stopSessionTimer() {
+    if (sessionTimerRef.current) clearInterval(sessionTimerRef.current);
+    setSessionTimerActive(false);
+    setSessionTimerMins(null);
+    setSessionTimerSecs(0);
+    sessionFiveNotified.current = false;
+  }
+
+  // ─── Volume helpers ──────────────────────────────────────────────────────────
+
+  function computeSessionVolume(s: WorkoutSession): number {
+    return s.exercises.reduce(
+      (total, ex) =>
+        total +
+        ex.sets.reduce(
+          (sum, set) => sum + (set.completed && set.weight > 0 ? set.weight * set.reps : 0),
+          0
+        ),
+      0
+    );
+  }
+
+  function formatVolume(v: number): string {
+    if (v >= 1000) return `${(v / 1000).toFixed(1)}t`;
+    return `${Math.round(v)}kg`;
+  }
+
+  async function dismissVolumeTooltip() {
+    await AsyncStorage.setItem('@grit/hasSeenVolumeTooltip', 'true');
+    setHasSeenVolume(true);
+  }
+
   // ─── Data Loading ────────────────────────────────────────────────────────────
 
   useFocusEffect(
@@ -213,6 +299,10 @@ export default function WorkoutScreen() {
   }
 
   function doStartWorkout() {
+    stopSessionTimer();
+    setLastLoggedWeights({});
+    setLastLoggedRepsMap({});
+    setLastLoggedExercise(null);
     setStartTime(new Date());
     setIsActive(true);
     setSession({
@@ -345,14 +435,18 @@ export default function WorkoutScreen() {
     const text = quickText.trim();
     if (!text || quickParsing) return;
 
-    // Try local parser with session context (last logged exercise as fallback)
-    let results = parseQuickLog(text, lastLoggedExercise);
+    // Pull per-exercise context so "same weight but 7 reps" works without re-typing
+    const contextWeight = lastLoggedExercise ? (lastLoggedWeights[lastLoggedExercise] ?? null) : null;
+    const contextReps = lastLoggedExercise ? (lastLoggedRepsMap[lastLoggedExercise] ?? null) : null;
+
+    // Try local parser with full session context
+    let results = parseQuickLog(text, lastLoggedExercise, contextWeight, contextReps);
 
     // Fallback to Claude if local parser can't make sense of it
     if (!results) {
       setQuickParsing(true);
       setQuickError('');
-      const claudeResults = await parseLogWithClaude(text, lastLoggedExercise);
+      const claudeResults = await parseLogWithClaude(text, lastLoggedExercise, contextWeight);
       setQuickParsing(false);
       if (claudeResults && claudeResults.length > 0) {
         results = claudeResults;
@@ -368,9 +462,11 @@ export default function WorkoutScreen() {
     setQuickError('');
     setQuickText('');
 
-    // Log all parsed entries
+    // Log all parsed entries — also update per-exercise weight/reps memory
     for (const parsed of results) {
       setLastLoggedExercise(parsed.exerciseName);
+      setLastLoggedWeights((prev) => ({ ...prev, [parsed.exerciseName]: parsed.weight }));
+      setLastLoggedRepsMap((prev) => ({ ...prev, [parsed.exerciseName]: parsed.reps }));
       setSession((prev) => {
         const existingIdx = prev.exercises.findIndex(
           (e) => e.name.toLowerCase() === parsed.exerciseName.toLowerCase()
@@ -463,6 +559,7 @@ export default function WorkoutScreen() {
         onPress: () => {
           if (restIntervalRef.current) clearInterval(restIntervalRef.current);
           setRestTimerActive(false);
+          stopSessionTimer();
           setIsActive(false);
         },
       },
@@ -505,7 +602,20 @@ export default function WorkoutScreen() {
           <TouchableOpacity onPress={discardWorkout}>
             <Text style={styles.discardText}>Discard</Text>
           </TouchableOpacity>
-          <Text style={styles.activeTitle}>In Progress</Text>
+          <TouchableOpacity style={styles.timerToggleBtn} onPress={() => setShowTimerPicker(true)}>
+            <Ionicons
+              name="timer-outline"
+              size={14}
+              color={sessionTimerActive ? (sessionTimerSecs <= 300 ? COLORS.warning : COLORS.accent) : COLORS.textMuted}
+            />
+            {sessionTimerActive ? (
+              <Text style={[styles.sessionCountdown, sessionTimerSecs <= 300 && { color: COLORS.warning }]}>
+                {formatRestTime(sessionTimerSecs)}
+              </Text>
+            ) : (
+              <Text style={styles.activeTitle}>In Progress</Text>
+            )}
+          </TouchableOpacity>
           <TouchableOpacity
             style={[styles.finishButton, saving && { opacity: 0.5 }]}
             onPress={finishWorkout}
@@ -565,6 +675,44 @@ export default function WorkoutScreen() {
             <Text style={styles.restReadyText}>Rest done. Back to work.</Text>
           </View>
         )}
+
+        {/* Volume display — educational tooltip first time, comparison after */}
+        {(() => {
+          const vol = computeSessionVolume(session);
+          if (vol === 0) return null;
+          const lastVol = allSessions.length > 0 ? computeSessionVolume(allSessions[0]) : 0;
+          if (!hasSeenVolume) {
+            return (
+              <View style={styles.volumeTooltip}>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.volumeTooltipTitle}>Volume = sets × reps × weight</Text>
+                  <Text style={styles.volumeTooltipBody}>
+                    Increase it over time. That's progressive overload.
+                  </Text>
+                </View>
+                <TouchableOpacity onPress={dismissVolumeTooltip} style={styles.volumeGotItBtn}>
+                  <Text style={styles.volumeGotItText}>Got it</Text>
+                </TouchableOpacity>
+              </View>
+            );
+          }
+          const diff = vol - lastVol;
+          return (
+            <View style={styles.volumeBar}>
+              <Ionicons name="barbell-outline" size={12} color={COLORS.textMuted} />
+              <Text style={styles.volumeNum}>{formatVolume(vol)}</Text>
+              {lastVol > 0 && (
+                <Text style={[styles.volumeComp, { color: diff >= 0 ? COLORS.success : COLORS.warning }]}>
+                  {diff > 0
+                    ? `↑ from ${formatVolume(lastVol)} last session — keep going.`
+                    : diff === 0
+                    ? `= matched ${formatVolume(lastVol)} last session.`
+                    : `↓ from ${formatVolume(lastVol)} last session — lower than usual.`}
+                </Text>
+              )}
+            </View>
+          );
+        })()}
 
         <ScrollView showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
           {session.exercises.map((ex, exIdx) => {
@@ -705,6 +853,7 @@ export default function WorkoutScreen() {
             autoCorrect={false}
             autoCapitalize="none"
             editable={!quickParsing}
+            scrollEnabled={true}
           />
           <TouchableOpacity
             style={[styles.quickLogSend, quickParsing && { opacity: 0.5 }]}
@@ -745,6 +894,73 @@ export default function WorkoutScreen() {
             )}
             keyboardShouldPersistTaps="handled"
           />
+        </View>
+      </Modal>
+
+      {/* Session timer picker modal */}
+      <Modal visible={showTimerPicker} animationType="slide" presentationStyle="pageSheet" transparent>
+        <View style={timerStyles.overlay}>
+          <View style={timerStyles.sheet}>
+            <View style={timerStyles.header}>
+              <Text style={timerStyles.title}>Session timer</Text>
+              <TouchableOpacity onPress={() => setShowTimerPicker(false)} hitSlop={12}>
+                <Ionicons name="close" size={22} color={COLORS.text} />
+              </TouchableOpacity>
+            </View>
+            <View style={timerStyles.presets}>
+              {[30, 45, 60, 90].map((mins) => (
+                <TouchableOpacity
+                  key={mins}
+                  style={[
+                    timerStyles.presetBtn,
+                    sessionTimerActive && sessionTimerMins === mins && timerStyles.presetBtnActive,
+                  ]}
+                  onPress={() => { startSessionTimer(mins); setShowTimerPicker(false); }}
+                >
+                  <Text
+                    style={[
+                      timerStyles.presetText,
+                      sessionTimerActive && sessionTimerMins === mins && timerStyles.presetTextActive,
+                    ]}
+                  >
+                    {mins} min
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+            <View style={timerStyles.customRow}>
+              <TextInput
+                style={timerStyles.customInput}
+                value={customTimerInput}
+                onChangeText={setCustomTimerInput}
+                placeholder="Custom minutes"
+                placeholderTextColor={COLORS.textMuted}
+                keyboardType="number-pad"
+              />
+              <TouchableOpacity
+                style={timerStyles.customBtn}
+                onPress={() => {
+                  const mins = parseInt(customTimerInput, 10);
+                  if (mins > 0 && mins <= 300) {
+                    startSessionTimer(mins);
+                    setShowTimerPicker(false);
+                    setCustomTimerInput('');
+                  }
+                }}
+              >
+                <Text style={timerStyles.customBtnText}>Set</Text>
+              </TouchableOpacity>
+            </View>
+            {sessionTimerActive && (
+              <TouchableOpacity
+                style={timerStyles.stopBtn}
+                onPress={() => { stopSessionTimer(); setShowTimerPicker(false); }}
+              >
+                <Ionicons name="stop-circle-outline" size={18} color={COLORS.danger} />
+                <Text style={timerStyles.stopBtnText}>Stop timer</Text>
+              </TouchableOpacity>
+            )}
+          </View>
         </View>
       </Modal>
 
@@ -1177,6 +1393,70 @@ const styles = StyleSheet.create({
   nextBadge: { backgroundColor: COLORS.border, borderRadius: RADIUS.xs, paddingHorizontal: 6, paddingVertical: 2 },
   lastExSuggestion: { fontSize: FONT_SIZE.xs, fontWeight: '700', color: COLORS.textSecondary },
   lastExSets: { fontSize: FONT_SIZE.sm, color: COLORS.textSecondary },
+  // Session timer toggle in header
+  timerToggleBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+  },
+  sessionCountdown: {
+    fontSize: FONT_SIZE.md,
+    fontWeight: '900',
+    color: COLORS.accent,
+    fontVariant: ['tabular-nums'] as any,
+  },
+  // Volume display
+  volumeBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: SPACING.sm,
+    paddingHorizontal: SPACING.lg,
+    paddingVertical: SPACING.xs,
+    backgroundColor: COLORS.surface,
+    borderBottomWidth: 1,
+    borderBottomColor: COLORS.border,
+  },
+  volumeNum: {
+    fontSize: FONT_SIZE.sm,
+    fontWeight: '800',
+    color: COLORS.text,
+  },
+  volumeComp: {
+    fontSize: FONT_SIZE.xs,
+    fontWeight: '600',
+    flex: 1,
+  },
+  volumeTooltip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: SPACING.sm,
+    paddingHorizontal: SPACING.lg,
+    paddingVertical: SPACING.sm,
+    backgroundColor: COLORS.accentDim,
+    borderBottomWidth: 1,
+    borderBottomColor: COLORS.accent + '40',
+  },
+  volumeTooltipTitle: {
+    fontSize: FONT_SIZE.xs,
+    fontWeight: '800',
+    color: COLORS.accent,
+  },
+  volumeTooltipBody: {
+    fontSize: FONT_SIZE.xs,
+    color: COLORS.textSecondary,
+    marginTop: 1,
+  },
+  volumeGotItBtn: {
+    paddingHorizontal: SPACING.sm,
+    paddingVertical: SPACING.xs,
+    backgroundColor: COLORS.accent,
+    borderRadius: RADIUS.sm,
+  },
+  volumeGotItText: {
+    fontSize: FONT_SIZE.xs,
+    fontWeight: '800',
+    color: COLORS.background,
+  },
   // Active header
   activeHeader: {
     flexDirection: 'row',
@@ -1530,6 +1810,96 @@ const setStyles = StyleSheet.create({
     backgroundColor: COLORS.border, alignItems: 'center', justifyContent: 'center',
   },
   doneBtnActive: { backgroundColor: COLORS.accent },
+});
+
+const timerStyles = StyleSheet.create({
+  overlay: {
+    flex: 1,
+    justifyContent: 'flex-end',
+    backgroundColor: 'rgba(0,0,0,0.5)',
+  },
+  sheet: {
+    backgroundColor: COLORS.surface,
+    borderTopLeftRadius: RADIUS.lg,
+    borderTopRightRadius: RADIUS.lg,
+    padding: SPACING.xl,
+    paddingBottom: SPACING.xxl,
+    gap: SPACING.md,
+    borderTopWidth: 1,
+    borderTopColor: COLORS.border,
+  },
+  header: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  title: { fontSize: FONT_SIZE.xl, fontWeight: '800', color: COLORS.text },
+  presets: {
+    flexDirection: 'row',
+    gap: SPACING.sm,
+  },
+  presetBtn: {
+    flex: 1,
+    paddingVertical: SPACING.md,
+    borderRadius: RADIUS.md,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    backgroundColor: COLORS.surfaceAlt,
+    alignItems: 'center',
+  },
+  presetBtnActive: {
+    borderColor: COLORS.accent,
+    backgroundColor: COLORS.accentDim,
+  },
+  presetText: {
+    fontSize: FONT_SIZE.sm,
+    fontWeight: '700',
+    color: COLORS.textSecondary,
+  },
+  presetTextActive: { color: COLORS.accent },
+  customRow: {
+    flexDirection: 'row',
+    gap: SPACING.sm,
+    alignItems: 'center',
+  },
+  customInput: {
+    flex: 1,
+    backgroundColor: COLORS.surfaceAlt,
+    borderRadius: RADIUS.md,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    paddingHorizontal: SPACING.md,
+    paddingVertical: SPACING.sm,
+    fontSize: FONT_SIZE.md,
+    color: COLORS.text,
+  },
+  customBtn: {
+    backgroundColor: COLORS.accent,
+    borderRadius: RADIUS.md,
+    paddingHorizontal: SPACING.lg,
+    paddingVertical: SPACING.sm,
+  },
+  customBtnText: {
+    fontSize: FONT_SIZE.md,
+    fontWeight: '800',
+    color: COLORS.background,
+  },
+  stopBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: SPACING.sm,
+    paddingVertical: SPACING.md,
+    borderRadius: RADIUS.md,
+    borderWidth: 1,
+    borderColor: COLORS.danger + '40',
+    backgroundColor: 'rgba(220,38,38,0.08)',
+  },
+  stopBtnText: {
+    fontSize: FONT_SIZE.md,
+    fontWeight: '700',
+    color: COLORS.danger,
+  },
 });
 
 const ciStyles = StyleSheet.create({

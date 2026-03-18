@@ -72,13 +72,18 @@ export interface ParsedLogEntry {
 /** Ask the backend Claude to parse free-form workout text. Returns null on any failure. */
 export async function parseLogWithClaude(
   text: string,
-  contextExercise?: string | null
+  contextExercise?: string | null,
+  contextWeight?: number | null
 ): Promise<ParsedLogEntry[] | null> {
   try {
     const response = await fetch(`${BASE_URL}/api/parse-log`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ text, contextExercise: contextExercise ?? null }),
+      body: JSON.stringify({
+        text,
+        contextExercise: contextExercise ?? null,
+        contextWeight: contextWeight ?? null,
+      }),
       signal: AbortSignal.timeout(5000),
     });
     if (!response.ok) return null;

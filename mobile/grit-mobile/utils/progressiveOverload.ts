@@ -294,7 +294,12 @@ function findExerciseInText(lower: string): { name: string; key: string } | null
 }
 
 /** Parse one segment of text into a single log entry. */
-function parseSingleEntry(text: string, fallbackExercise: string | null = null): QuickLogResult | null {
+function parseSingleEntry(
+  text: string,
+  fallbackExercise: string | null = null,
+  fallbackWeight: number | null = null,
+  fallbackReps: number | null = null
+): QuickLogResult | null {
   const lower = text.trim().toLowerCase();
   if (!lower) return null;
 
@@ -375,6 +380,21 @@ function parseSingleEntry(text: string, fallbackExercise: string | null = null):
     reps = nums[0];
   }
 
+  // ── Quick-log memory ──────────────────────────────────────────────────────
+  // "same weight but 7 reps" / "same" / "7 reps" (no weight given) all use
+  // the last-logged weight for this exercise so the user never has to repeat it.
+  const hasSame = /\bsame\b/i.test(lower);
+  if (weight === null && fallbackWeight !== null) {
+    // Use fallback when: "same" keyword present, OR reps were given but no weight
+    if (hasSame || (reps !== null && nums.length === 0)) {
+      weight = fallbackWeight;
+    }
+  }
+  // Use fallback reps when "same" implies repeating the last set entirely
+  if (reps === null && fallbackReps !== null && hasSame) {
+    reps = fallbackReps;
+  }
+
   if (weight === null || reps === null) return null;
   if (weight < 0 || weight > 1000) return null;
   if (reps <= 0 || reps > 100) return null;
@@ -398,17 +418,23 @@ function splitEntries(text: string): string[] {
  */
 export function parseQuickLog(
   text: string,
-  contextExercise: string | null = null
+  contextExercise: string | null = null,
+  contextWeight: number | null = null,
+  contextReps: number | null = null
 ): QuickLogResult[] | null {
   const entries = splitEntries(text.trim());
   const results: QuickLogResult[] = [];
   let lastExercise: string | null = contextExercise;
+  let lastWeight: number | null = contextWeight;
+  let lastReps: number | null = contextReps;
 
   for (const entry of entries) {
-    const parsed = parseSingleEntry(entry, lastExercise);
+    const parsed = parseSingleEntry(entry, lastExercise, lastWeight, lastReps);
     if (parsed) {
       results.push(parsed);
       lastExercise = parsed.exerciseName;
+      lastWeight = parsed.weight;
+      lastReps = parsed.reps;
     }
   }
 
