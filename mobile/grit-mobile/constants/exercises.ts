@@ -69,10 +69,9 @@ export function isCompound(exerciseName: string): boolean {
 
 // Key lifts tracked on progress screen
 export const KEY_LIFTS = [
-  { name: 'Bench Press', aliases: ['bench press', 'bench', 'barbell bench'] },
   { name: 'Squat', aliases: ['barbell back squat', 'squat', 'back squat', 'barbell squat'] },
+  { name: 'Bench Press', aliases: ['bench press', 'bench', 'barbell bench'] },
   { name: 'Deadlift', aliases: ['conventional deadlift', 'deadlift', 'sumo deadlift'] },
-  { name: 'Overhead Press', aliases: ['overhead press', 'ohp', 'push press', 'military press'] },
 ];
 
 export function matchKeyLift(exerciseName: string): string | null {

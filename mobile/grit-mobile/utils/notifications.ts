@@ -285,6 +285,54 @@ export async function schedulePhysiqueReminder(): Promise<void> {
   }
 }
 
+// ─── Leg day motivation ───────────────────────────────────────────────────────
+
+const LEG_DAY_MESSAGES = [
+  "Leg day. The exercise everyone skips. Don't be everyone.",
+  "Your legs carry everything you do. Train them like it.",
+  "Leg day is the reason your upper body actually looks proportional. Go.",
+  "Every guy who skips leg day thinks nobody notices. We all notice.",
+  "Leg day. The price of not looking ridiculous at the beach. Pay it.",
+];
+
+/**
+ * Schedule a morning leg day notification for days where lower body is trained.
+ * legDayIndices: 0=Sun…6=Sat
+ * gymTime: optional, defaults to 07:00
+ */
+export async function scheduleLegDayNotifications(
+  legDayIndices: number[],
+  gymTime?: string
+): Promise<void> {
+  if (Platform.OS === 'web') return;
+  if (legDayIndices.length === 0) return;
+  try {
+    const granted = await requestNotificationPermissions();
+    if (!granted) return;
+
+    const Notifications = getNotifications();
+    const [h, m] = gymTime ? gymTime.split(':').map(Number) : [7, 0];
+
+    for (const day of legDayIndices) {
+      const expoWeekday = (day + 1) as 1 | 2 | 3 | 4 | 5 | 6 | 7;
+      await Notifications.scheduleNotificationAsync({
+        content: {
+          title: 'GRIT — Leg Day',
+          body: pick(LEG_DAY_MESSAGES),
+        },
+        trigger: {
+          type: 'weekly' as const,
+          weekday: expoWeekday,
+          hour: h,
+          minute: m,
+        } as any,
+      });
+    }
+  } catch (e: any) {
+    console.log('[GRIT notifications] scheduleLegDayNotifications failed (non-fatal):', e?.message);
+  }
+}
+
 // ─── Streak protection ────────────────────────────────────────────────────────
 
 /**

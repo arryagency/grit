@@ -23,7 +23,6 @@ import {
   getBodyWeightEntries,
   addBodyWeightEntry,
   getBodyWeightTrend,
-  getWeeklyWaterAverage,
   BodyWeightEntry,
   WorkoutSession,
   PRRecord,
@@ -171,7 +170,6 @@ export default function ProgressScreen() {
   const [sessions, setSessions] = useState<WorkoutSession[]>([]);
   const [prs, setPRs] = useState<PRRecord>({});
   const [bodyWeightEntries, setBodyWeightEntries] = useState<BodyWeightEntry[]>([]);
-  const [weeklyWater, setWeeklyWater] = useState(0);
   const [showLogWeight, setShowLogWeight] = useState(false);
   const [weightInput, setWeightInput] = useState('');
 
@@ -181,12 +179,10 @@ export default function ProgressScreen() {
         getSessions(),
         getPRs(),
         getBodyWeightEntries(),
-        getWeeklyWaterAverage(),
-      ]).then(([s, p, bw, ww]) => {
+      ]).then(([s, p, bw]) => {
         setSessions(s);
         setPRs(p);
         setBodyWeightEntries(bw);
-        setWeeklyWater(ww);
       });
     }, [])
   );
@@ -325,24 +321,6 @@ export default function ProgressScreen() {
             </TouchableOpacity>
           )}
         </View>
-
-        {/* Water weekly average */}
-        {weeklyWater > 0 && (
-          <View style={styles.section}>
-            <Text style={styles.sectionLabel}>Hydration (7-day avg)</Text>
-            <View style={styles.waterCard}>
-              <Ionicons name="water-outline" size={20} color="#4dd0e1" />
-              <Text style={styles.waterAvgValue}>{(weeklyWater / 1000).toFixed(1)}L</Text>
-              <Text style={styles.waterAvgLabel}>avg per day this week</Text>
-              {weeklyWater < 2000 && (
-                <View style={styles.waterWarning}>
-                  <Ionicons name="warning-outline" size={14} color={COLORS.warning} />
-                  <Text style={styles.waterWarningText}>Below 2L. Performance suffers when dehydrated.</Text>
-                </View>
-              )}
-            </View>
-          </View>
-        )}
 
         {/* Muscle balance */}
         {Object.keys(muscleBalance).length > 0 && (

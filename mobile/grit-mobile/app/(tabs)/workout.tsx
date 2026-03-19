@@ -35,6 +35,12 @@ import {
   saveTemplate,
   deleteTemplate,
   WorkoutTemplate,
+  getSavedProgramme,
+  SavedProgramme,
+  getProgressionSuggestions,
+  saveProgressionSuggestions,
+  clearProgressionSuggestion,
+  ProgressionSuggestion,
 } from '@/utils/storage';
 import { getSuggestion, parseQuickLog, getMissingPieceQuestion } from '@/utils/progressiveOverload';
 import { parseLogWithClaude } from '@/utils/api';
@@ -53,25 +59,6 @@ const QUICK_PLACEHOLDERS = [
 ];
 
 // ─── Types ────────────────────────────────────────────────────────────────────
-
-type Sleep = 'good' | 'bad' | null;
-type Food = 'good' | 'bad' | null;
-
-interface CheckIn {
-  sleep: Sleep;
-  food: Food;
-  creatine: boolean | null;
-}
-
-function getCheckInLine(sleep: Sleep, food: Food): string {
-  if (sleep === 'bad' && food === 'bad')
-    return "You're running on empty. Don't ego lift today — keep it technical.";
-  if (sleep === 'bad' && food === 'good')
-    return 'Short on sleep. Keep the intensity controlled today.';
-  if (sleep === 'good' && food === 'bad')
-    return "Decent sleep but not fuelled. Hydrate well and keep it manageable.";
-  return "You're set up right. Good session incoming.";
-}
 
 // ─── Main Screen ──────────────────────────────────────────────────────────────
 
@@ -115,9 +102,6 @@ export default function WorkoutScreen() {
   // Volume tooltip (shown once, then comparison mode)
   const [hasSeenVolume, setHasSeenVolume] = useState(false);
 
-  // Check-in
-  const [showCheckIn, setShowCheckIn] = useState(false);
-  const [checkIn, setCheckIn] = useState<CheckIn>({ sleep: null, food: null, creatine: null });
 
   // PR celebration
   const [prOverlay, setPrOverlay] = useState<{ exercise: string; weight: number; reps: number }[]>([]);
@@ -267,10 +251,13 @@ export default function WorkoutScreen() {
 
   // ─── Data Loading ────────────────────────────────────────────────────────────
 
+  const [savedProgramme, setSavedProgramme] = useState<SavedProgramme | null>(null);
+
   useFocusEffect(
     useCallback(() => {
       getSessions().then(setAllSessions);
       getTemplates().then(setTemplates);
+      getSavedProgramme().then(setSavedProgramme);
     }, [])
   );
 
@@ -286,15 +273,7 @@ export default function WorkoutScreen() {
     ? ALL_EXERCISES.filter((e) => e.toLowerCase().includes(search.toLowerCase()))
     : ALL_EXERCISES;
 
-  // ─── Check-In Flow ──────────────────────────────────────────────────────────
-
   function onPressStart() {
-    setCheckIn({ sleep: null, food: null, creatine: null });
-    setShowCheckIn(true);
-  }
-
-  function confirmCheckIn() {
-    setShowCheckIn(false);
     doStartWorkout();
   }
 
@@ -336,6 +315,8 @@ export default function WorkoutScreen() {
   // ─── Exercise Management ────────────────────────────────────────────────────
 
   function addExercise(name: string) {
+    // Clear any pending progression suggestion for this exercise
+    clearProgressionSuggestion(name).catch(() => {});
     const suggestion = getSuggestion(name, allSessions);
     const lastEx = getLastSessionForExercise(name, allSessions);
     const defaultWeight =
@@ -497,6 +478,57 @@ export default function WorkoutScreen() {
     startRestTimer();
   }
 
+  // ─── Progression Suggestion Analysis ────────────────────────────────────────
+
+  async function analyseProgressionSuggestions(
+    completedSession: WorkoutSession,
+    allSessionsNow: WorkoutSession[]
+  ) {
+    const existing = await getProgressionSuggestions();
+    const updated = [...existing];
+
+    for (const ex of completedSession.exercises) {
+      const completedSets = ex.sets.filter((s) => s.completed && s.weight > 0);
+      if (completedSets.length === 0) continue;
+      const topWeight = Math.max(...completedSets.map((s) => s.weight));
+
+      // Find last 2 sessions for this exercise (not counting today's)
+      const prev = allSessionsNow
+        .filter((s) => s.id !== completedSession.id)
+        .slice(0, 10)
+        .filter((s) => s.exercises.some((e) => e.name.toLowerCase() === ex.name.toLowerCase()))
+        .slice(0, 2);
+
+      if (prev.length < 2) continue;
+
+      // Check if they hit the same weight in both previous sessions
+      const prevWeights = prev.map((s) => {
+        const e = s.exercises.find((e) => e.name.toLowerCase() === ex.name.toLowerCase());
+        if (!e) return 0;
+        const done = e.sets.filter((set) => set.completed && set.weight > 0);
+        return done.length > 0 ? Math.max(...done.map((set) => set.weight)) : 0;
+      });
+
+      if (prevWeights[0] === topWeight && prevWeights[1] === topWeight) {
+        const suggestedWeight = topWeight + 2.5;
+        const alreadyExists = updated.some(
+          (s) => s.exercise.toLowerCase() === ex.name.toLowerCase()
+        );
+        if (!alreadyExists) {
+          updated.push({
+            exercise: ex.name,
+            currentWeight: topWeight,
+            suggestedWeight,
+            message: `You've hit ${topWeight}kg for 2 sessions in a row. You've earned it.`,
+            createdAt: new Date().toISOString(),
+          });
+        }
+      }
+    }
+
+    await saveProgressionSuggestions(updated);
+  }
+
   // ─── Form Tutorial ───────────────────────────────────────────────────────────
 
   function watchForm(exerciseName: string) {
@@ -523,11 +555,15 @@ export default function WorkoutScreen() {
       await saveSession(finalSession);
       const newPRs = await updatePRs(finalSession);
 
+      // Analyse progression suggestions
+      const updatedSessions = await getSessions();
+      await analyseProgressionSuggestions(finalSession, updatedSessions);
+
       // Stop rest timer
       if (restIntervalRef.current) clearInterval(restIntervalRef.current);
       setRestTimerActive(false);
       setIsActive(false);
-      setAllSessions(await getSessions());
+      setAllSessions(updatedSessions);
 
       if (newPRs.length > 0) {
         setPrOverlay(newPRs);
@@ -570,24 +606,37 @@ export default function WorkoutScreen() {
 
   if (!isActive) {
     return (
-      <>
-        <IdleScreen
-          onStart={onPressStart}
-          sessions={allSessions}
-          templates={templates}
-          onLoadTemplate={loadTemplate}
-          onDeleteTemplate={(id) => {
-            deleteTemplate(id).then(() => getTemplates().then(setTemplates));
-          }}
-        />
-        <CheckInModal
-          visible={showCheckIn}
-          checkIn={checkIn}
-          onChange={setCheckIn}
-          onConfirm={confirmCheckIn}
-          onSkip={confirmCheckIn}
-        />
-      </>
+      <IdleScreen
+        onStart={onPressStart}
+        sessions={allSessions}
+        templates={templates}
+        savedProgramme={savedProgramme}
+        onLoadTemplate={loadTemplate}
+        onDeleteTemplate={(id) => {
+          deleteTemplate(id).then(() => getTemplates().then(setTemplates));
+        }}
+        onLoadProgrammeSession={(exercises) => {
+          setStartTime(new Date());
+          setIsActive(true);
+          setSession({
+            id: generateId(),
+            date: new Date().toISOString(),
+            exercises: exercises.map((ex) => {
+              const suggestion = getSuggestion(ex.name, allSessions);
+              const lastEx = getLastSessionForExercise(ex.name, allSessions);
+              const defaultWeight =
+                suggestion?.weight ??
+                (lastEx ? Math.max(...lastEx.sets.filter((s) => s.weight > 0).map((s) => s.weight), 0) : 0);
+              return {
+                name: ex.name,
+                sets: Array.from({ length: ex.sets }, () => emptySet(defaultWeight, ex.reps)),
+              };
+            }),
+            duration: 0,
+            notes: '',
+          });
+        }}
+      />
     );
   }
 
@@ -840,6 +889,15 @@ export default function WorkoutScreen() {
           );
         })()}
 
+        {/* Quick Log hint label */}
+        <View style={styles.quickLogHintRow}>
+          <Ionicons name="flash" size={12} color={COLORS.accent} />
+          <Text style={styles.quickLogHintText}>
+            Type any lift to log it instantly
+          </Text>
+          <Text style={styles.quickLogHintExample}>bench 80 8 · squat 100 5</Text>
+        </View>
+
         {/* Quick Log Bar */}
         <View style={styles.quickLogBar}>
           <TextInput
@@ -993,103 +1051,6 @@ export default function WorkoutScreen() {
   );
 }
 
-// ─── Check-In Modal ───────────────────────────────────────────────────────────
-
-interface CheckInModalProps {
-  visible: boolean;
-  checkIn: CheckIn;
-  onChange: (c: CheckIn) => void;
-  onConfirm: () => void;
-  onSkip: () => void;
-}
-
-function CheckInModal({ visible, checkIn, onChange, onConfirm, onSkip }: CheckInModalProps) {
-  const allAnswered = checkIn.sleep !== null && checkIn.food !== null && checkIn.creatine !== null;
-  const line = checkIn.sleep !== null && checkIn.food !== null
-    ? getCheckInLine(checkIn.sleep, checkIn.food)
-    : null;
-
-  return (
-    <Modal visible={visible} animationType="slide" presentationStyle="pageSheet" transparent>
-      <View style={ciStyles.overlay}>
-        <View style={ciStyles.sheet}>
-          <View style={ciStyles.header}>
-            <Text style={ciStyles.title}>Pre-session check</Text>
-            <TouchableOpacity onPress={onSkip}>
-              <Text style={ciStyles.skip}>Skip</Text>
-            </TouchableOpacity>
-          </View>
-
-          <Text style={ciStyles.question}>How did you sleep?</Text>
-          <View style={ciStyles.row}>
-            {(['good', 'bad'] as const).map((v) => (
-              <TouchableOpacity
-                key={v}
-                style={[ciStyles.pill, checkIn.sleep === v && ciStyles.pillActive]}
-                onPress={() => onChange({ ...checkIn, sleep: v })}
-              >
-                <Text style={[ciStyles.pillText, checkIn.sleep === v && ciStyles.pillTextActive]}>
-                  {v === 'good' ? 'Slept well' : 'Rough night'}
-                </Text>
-              </TouchableOpacity>
-            ))}
-          </View>
-
-          <Text style={ciStyles.question}>Have you eaten today?</Text>
-          <View style={ciStyles.row}>
-            {(['good', 'bad'] as const).map((v) => (
-              <TouchableOpacity
-                key={v}
-                style={[ciStyles.pill, checkIn.food === v && ciStyles.pillActive]}
-                onPress={() => onChange({ ...checkIn, food: v })}
-              >
-                <Text style={[ciStyles.pillText, checkIn.food === v && ciStyles.pillTextActive]}>
-                  {v === 'good' ? 'Fuelled' : 'Not really'}
-                </Text>
-              </TouchableOpacity>
-            ))}
-          </View>
-
-          <Text style={ciStyles.question}>Creatine today?</Text>
-          <View style={ciStyles.row}>
-            {([true, false] as const).map((v) => (
-              <TouchableOpacity
-                key={String(v)}
-                style={[ciStyles.pill, checkIn.creatine === v && ciStyles.pillActive]}
-                onPress={() => onChange({ ...checkIn, creatine: v })}
-              >
-                <Text style={[ciStyles.pillText, checkIn.creatine === v && ciStyles.pillTextActive]}>
-                  {v ? 'Yes' : 'Not yet'}
-                </Text>
-              </TouchableOpacity>
-            ))}
-          </View>
-
-          {line && (
-            <View style={ciStyles.gritLine}>
-              <Text style={ciStyles.gritLineText}>{line}</Text>
-            </View>
-          )}
-
-          {checkIn.creatine === false && (
-            <View style={ciStyles.creatineReminder}>
-              <Ionicons name="information-circle-outline" size={14} color={COLORS.warning} />
-              <Text style={ciStyles.creatineText}>Take your creatine before you forget.</Text>
-            </View>
-          )}
-
-          <TouchableOpacity
-            style={[ciStyles.startBtn, !allAnswered && ciStyles.startBtnDisabled]}
-            onPress={allAnswered ? onConfirm : undefined}
-          >
-            <Text style={ciStyles.startBtnText}>Start session</Text>
-          </TouchableOpacity>
-        </View>
-      </View>
-    </Modal>
-  );
-}
-
 // ─── Set Row ─────────────────────────────────────────────────────────────────
 
 interface SetRowProps {
@@ -1168,11 +1129,13 @@ interface IdleScreenProps {
   onStart: () => void;
   sessions: WorkoutSession[];
   templates: WorkoutTemplate[];
+  savedProgramme: SavedProgramme | null;
   onLoadTemplate: (t: WorkoutTemplate) => void;
   onDeleteTemplate: (id: string) => void;
+  onLoadProgrammeSession: (exercises: { name: string; sets: number; reps: number }[]) => void;
 }
 
-function IdleScreen({ onStart, sessions, templates, onLoadTemplate, onDeleteTemplate }: IdleScreenProps) {
+function IdleScreen({ onStart, sessions, templates, savedProgramme, onLoadTemplate, onDeleteTemplate, onLoadProgrammeSession }: IdleScreenProps) {
   const lastSession = sessions[0];
 
   function confirmLoadTemplate(t: WorkoutTemplate) {
@@ -1212,8 +1175,48 @@ function IdleScreen({ onStart, sessions, templates, onLoadTemplate, onDeleteTemp
         <View style={styles.quickHintCard}>
           <Ionicons name="flash-outline" size={16} color={COLORS.accent} />
           <Text style={styles.quickHintText}>
-            During a session: type <Text style={{ color: COLORS.accent }}>bench 80 4x8</Text> to log instantly
+            Inside a session: type <Text style={{ color: COLORS.accent }}>bench 80 4x8</Text> to log instantly — no tapping required
           </Text>
+        </View>
+
+        {/* Routines section */}
+        <View style={styles.section}>
+          <Text style={styles.sectionLabel}>Routines</Text>
+          {savedProgramme ? (
+            savedProgramme.programme.sessions.map((s, i) => (
+              <TouchableOpacity
+                key={i}
+                style={styles.routineCard}
+                onPress={() =>
+                  onLoadProgrammeSession(
+                    s.exercises.map((e) => ({
+                      name: e.name,
+                      sets: e.sets,
+                      reps: parseInt(e.reps.split('-')[0], 10) || 8,
+                    }))
+                  )
+                }
+                activeOpacity={0.7}
+              >
+                <View style={styles.routineLeft}>
+                  <Text style={styles.routineName}>{s.label}</Text>
+                  <Text style={styles.routineMeta}>
+                    {s.exercises.length} exercise{s.exercises.length !== 1 ? 's' : ''} · {s.exercises.map((e) => e.name).slice(0, 2).join(', ')}{s.exercises.length > 2 ? '…' : ''}
+                  </Text>
+                </View>
+                <View style={styles.loadBtn}>
+                  <Ionicons name="play" size={14} color={COLORS.background} />
+                  <Text style={styles.loadBtnText}>Start</Text>
+                </View>
+              </TouchableOpacity>
+            ))
+          ) : (
+            <View style={styles.routineEmpty}>
+              <Text style={styles.routineEmptyText}>
+                No routines yet. Build a programme or create your own routine below.
+              </Text>
+            </View>
+          )}
         </View>
 
         {/* Templates section */}
@@ -1331,6 +1334,55 @@ const styles = StyleSheet.create({
     gap: SPACING.sm,
   },
   quickHintText: { fontSize: FONT_SIZE.xs, color: COLORS.textSecondary, flex: 1 },
+  // Routines
+  routineCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: COLORS.surface,
+    borderRadius: RADIUS.md,
+    borderWidth: 1,
+    borderColor: COLORS.accent + '40',
+    borderLeftWidth: 3,
+    borderLeftColor: COLORS.accent,
+    padding: SPACING.md,
+    gap: SPACING.sm,
+  },
+  routineLeft: { flex: 1, gap: 3 },
+  routineName: { fontSize: FONT_SIZE.md, fontWeight: '800', color: COLORS.text },
+  routineMeta: { fontSize: FONT_SIZE.xs, color: COLORS.textSecondary },
+  routineEmpty: {
+    backgroundColor: COLORS.surface,
+    borderRadius: RADIUS.md,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    padding: SPACING.lg,
+  },
+  routineEmptyText: {
+    fontSize: FONT_SIZE.sm,
+    color: COLORS.textMuted,
+    lineHeight: 20,
+  },
+  // Quick log hint row inside active session
+  quickLogHintRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: SPACING.xs,
+    paddingHorizontal: SPACING.xl,
+    paddingVertical: SPACING.sm,
+    backgroundColor: COLORS.accentDim,
+    borderTopWidth: 1,
+    borderTopColor: COLORS.accent + '30',
+  },
+  quickLogHintText: {
+    fontSize: FONT_SIZE.xs,
+    color: COLORS.accent,
+    fontWeight: '700',
+    flex: 1,
+  },
+  quickLogHintExample: {
+    fontSize: FONT_SIZE.xs,
+    color: COLORS.textMuted,
+  },
   section: { marginHorizontal: SPACING.xl, gap: SPACING.sm, marginBottom: SPACING.xl },
   sectionLabel: {
     fontSize: FONT_SIZE.xs,
@@ -1903,61 +1955,3 @@ const timerStyles = StyleSheet.create({
   },
 });
 
-const ciStyles = StyleSheet.create({
-  overlay: {
-    flex: 1,
-    justifyContent: 'flex-end',
-    backgroundColor: 'rgba(0,0,0,0.6)',
-  },
-  sheet: {
-    backgroundColor: COLORS.surface,
-    borderTopLeftRadius: RADIUS.lg,
-    borderTopRightRadius: RADIUS.lg,
-    padding: SPACING.xl,
-    paddingBottom: SPACING.xxl,
-    gap: SPACING.md,
-    borderTopWidth: 1,
-    borderTopColor: COLORS.border,
-  },
-  header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-  title: { fontSize: FONT_SIZE.xl, fontWeight: '800', color: COLORS.text },
-  skip: { fontSize: FONT_SIZE.sm, color: COLORS.textSecondary, fontWeight: '600' },
-  question: { fontSize: FONT_SIZE.md, fontWeight: '700', color: COLORS.text, marginTop: SPACING.xs },
-  row: { flexDirection: 'row', gap: SPACING.sm },
-  pill: {
-    flex: 1,
-    paddingVertical: SPACING.sm,
-    borderRadius: RADIUS.md,
-    borderWidth: 1,
-    borderColor: COLORS.border,
-    backgroundColor: COLORS.surfaceAlt,
-    alignItems: 'center',
-  },
-  pillActive: { borderColor: COLORS.accent, backgroundColor: COLORS.accentDim },
-  pillText: { fontSize: FONT_SIZE.sm, fontWeight: '600', color: COLORS.textSecondary },
-  pillTextActive: { color: COLORS.accent },
-  gritLine: {
-    backgroundColor: COLORS.accentDim,
-    borderRadius: RADIUS.md,
-    padding: SPACING.md,
-    borderLeftWidth: 3,
-    borderLeftColor: COLORS.accent,
-    marginTop: SPACING.xs,
-  },
-  gritLineText: { fontSize: FONT_SIZE.sm, color: COLORS.text, fontStyle: 'italic' },
-  creatineReminder: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: SPACING.xs,
-  },
-  creatineText: { fontSize: FONT_SIZE.xs, color: COLORS.warning },
-  startBtn: {
-    backgroundColor: COLORS.accent,
-    borderRadius: RADIUS.md,
-    paddingVertical: SPACING.md,
-    alignItems: 'center',
-    marginTop: SPACING.sm,
-  },
-  startBtnDisabled: { opacity: 0.35 },
-  startBtnText: { fontSize: FONT_SIZE.md, fontWeight: '800', color: COLORS.background },
-});

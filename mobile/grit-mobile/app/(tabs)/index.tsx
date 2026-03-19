@@ -6,11 +6,9 @@ import {
   TouchableOpacity,
   SafeAreaView,
   RefreshControl,
-  Alert,
 } from 'react-native';
 import { useState, useCallback } from 'react';
 import { router, useFocusEffect } from 'expo-router';
-import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Ionicons } from '@expo/vector-icons';
 import {
   getProfile,
@@ -23,57 +21,38 @@ import {
   formatDate,
   getBodyWeightEntries,
   getBodyWeightTrend,
-  getTodayWater,
-  addWater,
   getSavedProgramme,
   SavedProgramme,
   BodyWeightEntry,
-  WaterEntry,
+  getProgressionSuggestions,
+  ProgressionSuggestion,
 } from '@/utils/storage';
 import { getMotivationalLine, getQuoteOfTheDay } from '@/utils/progressiveOverload';
 import { COLORS, SPACING, FONT_SIZE, RADIUS } from '@/constants/theme';
 
 const DAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
-function confirmReset() {
-  Alert.alert(
-    'Reset all data?',
-    'Wipes every session, PR, and your profile. Cannot be undone. Use for testing only.',
-    [
-      { text: 'Cancel', style: 'cancel' },
-      {
-        text: 'Reset everything',
-        style: 'destructive',
-        onPress: async () => {
-          await AsyncStorage.clear();
-          router.replace('/onboarding');
-        },
-      },
-    ]
-  );
-}
-
 export default function HomeScreen() {
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [sessions, setSessions] = useState<WorkoutSession[]>([]);
   const [refreshing, setRefreshing] = useState(false);
   const [bodyWeightEntries, setBodyWeightEntries] = useState<BodyWeightEntry[]>([]);
-  const [water, setWater] = useState<WaterEntry>({ date: '', amount: 0, goal: 2500 });
   const [savedProgramme, setSavedProgramme] = useState<SavedProgramme | null>(null);
+  const [progressionSuggestions, setProgressionSuggestions] = useState<ProgressionSuggestion[]>([]);
 
   async function load() {
-    const [p, s, bw, w, sp] = await Promise.all([
+    const [p, s, bw, sp, ps] = await Promise.all([
       getProfile(),
       getSessions(),
       getBodyWeightEntries(),
-      getTodayWater(),
       getSavedProgramme(),
+      getProgressionSuggestions(),
     ]);
     setProfile(p);
     setSessions(s);
     setBodyWeightEntries(bw);
-    setWater(w);
     setSavedProgramme(sp);
+    setProgressionSuggestions(ps);
   }
 
   useFocusEffect(
@@ -107,13 +86,7 @@ export default function HomeScreen() {
   const weightChange =
     currentWeight && startWeight ? currentWeight - startWeight : null;
 
-  // Water
-  const waterPct = water.goal > 0 ? Math.min(water.amount / water.goal, 1) : 0;
-
-  async function handleAddWater(ml: number) {
-    const updated = await addWater(ml);
-    setWater(updated);
-  }
+  const isGuidedMode = !profile?.userMode || profile.userMode === 'guided';
 
   function formatVol(v: number) {
     if (v === 0) return '—';
@@ -141,7 +114,7 @@ export default function HomeScreen() {
               <Text style={styles.streakNumber}>{streak}</Text>
               <Text style={styles.streakLabel}>streak</Text>
             </View>
-            <TouchableOpacity onPress={confirmReset} hitSlop={12}>
+            <TouchableOpacity onPress={() => router.push('/settings' as any)} hitSlop={12}>
               <Ionicons name="settings-outline" size={20} color={COLORS.textMuted} />
             </TouchableOpacity>
           </View>
@@ -152,10 +125,29 @@ export default function HomeScreen() {
           <Text style={styles.motivationText}>{getQuoteOfTheDay()}</Text>
         </View>
 
-        {/* Contextual status line — only shown when there's something worth saying */}
+        {/* Contextual status line */}
         {sessions.length > 0 && daysSince < 999 && (
           <View style={styles.contextLine}>
             <Text style={styles.contextLineText}>{motivationalLine}</Text>
+          </View>
+        )}
+
+        {/* Progressive overload suggestion cards */}
+        {progressionSuggestions.length > 0 && (
+          <View style={styles.section}>
+            {progressionSuggestions.slice(0, 2).map((s) => (
+              <View key={s.exercise} style={styles.progressionCard}>
+                <View style={styles.progressionHeader}>
+                  <Ionicons name="trending-up" size={16} color={COLORS.background} />
+                  <Text style={styles.progressionTag}>READY TO PROGRESS</Text>
+                </View>
+                <Text style={styles.progressionText}>
+                  Add <Text style={styles.progressionHighlight}>{(s.suggestedWeight - s.currentWeight).toFixed(1)}kg</Text> to{' '}
+                  <Text style={styles.progressionHighlight}>{s.exercise}</Text> next session.{'\n'}
+                  {s.message}
+                </Text>
+              </View>
+            ))}
           </View>
         )}
 
@@ -240,50 +232,8 @@ export default function HomeScreen() {
           </TouchableOpacity>
         </View>
 
-        {/* Water intake widget */}
-        <View style={styles.section}>
-          <Text style={styles.sectionLabel}>Water today</Text>
-          <View style={styles.waterWidget}>
-            <View style={styles.waterInfo}>
-              <Text style={styles.waterAmount}>
-                {(water.amount / 1000).toFixed(1)}L
-              </Text>
-              <Text style={styles.waterGoal}>/ {(water.goal / 1000).toFixed(1)}L goal</Text>
-            </View>
-            <View style={styles.waterProgressBar}>
-              <View
-                style={[
-                  styles.waterProgressFill,
-                  { width: `${waterPct * 100}%` },
-                  waterPct >= 1 && styles.waterProgressComplete,
-                ]}
-              />
-            </View>
-            <View style={styles.waterButtons}>
-              <TouchableOpacity style={styles.waterBtn} onPress={() => handleAddWater(250)}>
-                <Text style={styles.waterBtnText}>+250ml</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={styles.waterBtn} onPress={() => handleAddWater(500)}>
-                <Text style={styles.waterBtnText}>+500ml</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[styles.waterBtn, styles.waterBtnCustom]}
-                onPress={() => handleAddWater(750)}
-              >
-                <Text style={[styles.waterBtnText, { color: COLORS.accent }]}>+750ml</Text>
-              </TouchableOpacity>
-            </View>
-            {waterPct >= 1 && (
-              <View style={styles.waterComplete}>
-                <Ionicons name="checkmark-circle" size={14} color={COLORS.success} />
-                <Text style={styles.waterCompleteText}>Goal hit. Keep it up.</Text>
-              </View>
-            )}
-          </View>
-        </View>
-
-        {/* Saved programme card */}
-        {savedProgramme && (
+        {/* Saved programme card — guided mode only */}
+        {isGuidedMode && savedProgramme && (
           <View style={styles.section}>
             <Text style={styles.sectionLabel}>My Programme</Text>
             <TouchableOpacity
@@ -309,27 +259,47 @@ export default function HomeScreen() {
           </View>
         )}
 
-        {/* Programme builder CTA */}
-        <View style={styles.section}>
-          <TouchableOpacity
-            style={styles.programmeCard}
-            onPress={() => router.push('/programme')}
-            activeOpacity={0.7}
-          >
-            <View style={styles.programmeLeft}>
-              <Text style={styles.programmeTitle}>
-                {savedProgramme ? 'Rebuild my programme' : 'Build my programme'}
-              </Text>
-              <Text style={styles.programmeSubtitle}>
-                {savedProgramme
-                  ? 'Generate a new programme with different settings'
-                  : 'Get a personalised plan built around your goal and schedule'}
-              </Text>
-            </View>
-            <View style={styles.programmeIcon}>
-              <Ionicons name="sparkles" size={20} color={COLORS.background} />
-            </View>
-          </TouchableOpacity>
+        {/* Programme builder CTA — guided mode only */}
+        {isGuidedMode && (
+          <View style={styles.section}>
+            <TouchableOpacity
+              style={styles.programmeCard}
+              onPress={() => router.push('/programme')}
+              activeOpacity={0.7}
+            >
+              <View style={styles.programmeLeft}>
+                <Text style={styles.programmeTitle}>
+                  {savedProgramme ? 'Rebuild my programme' : 'Build my programme'}
+                </Text>
+                <Text style={styles.programmeSubtitle}>
+                  {savedProgramme
+                    ? 'Generate a new programme with different settings'
+                    : 'Get a personalised plan built around your goal and schedule'}
+                </Text>
+              </View>
+              <View style={styles.programmeIcon}>
+                <Ionicons name="sparkles" size={20} color={COLORS.background} />
+              </View>
+            </TouchableOpacity>
+          </View>
+        )}
+
+        {/* Stats row */}
+        <View style={styles.statsRow}>
+          <View style={styles.statCard}>
+            <Text style={styles.statValue}>{sessions.length}</Text>
+            <Text style={styles.statLabel}>Sessions</Text>
+          </View>
+          <View style={styles.statCard}>
+            <Text style={styles.statValue}>{streak}</Text>
+            <Text style={styles.statLabel}>Streak</Text>
+          </View>
+          <View style={styles.statCard}>
+            <Text style={[styles.statValue, weekVol.current > 0 && weekVol.current >= weekVol.best && { color: COLORS.accent }]}>
+              {formatVol(weekVol.current)}
+            </Text>
+            <Text style={styles.statLabel}>This week</Text>
+          </View>
         </View>
 
         {/* Last session */}
@@ -372,24 +342,6 @@ export default function HomeScreen() {
           </View>
         )}
 
-        {/* Stats row */}
-        <View style={styles.statsRow}>
-          <View style={styles.statCard}>
-            <Text style={styles.statValue}>{sessions.length}</Text>
-            <Text style={styles.statLabel}>Sessions</Text>
-          </View>
-          <View style={styles.statCard}>
-            <Text style={styles.statValue}>{streak}</Text>
-            <Text style={styles.statLabel}>Streak</Text>
-          </View>
-          <View style={styles.statCard}>
-            <Text style={[styles.statValue, weekVol.current > 0 && weekVol.current >= weekVol.best && { color: COLORS.accent }]}>
-              {formatVol(weekVol.current)}
-            </Text>
-            <Text style={styles.statLabel}>This week</Text>
-          </View>
-        </View>
-
         {/* Empty state */}
         {sessions.length === 0 && (
           <View style={styles.emptyState}>
@@ -405,11 +357,10 @@ export default function HomeScreen() {
 }
 
 function getNextSession(programme: import('@/utils/programmeBuilder').Programme): string | null {
-  const todayJS = new Date().getDay(); // 0=Sun, 1=Mon...6=Sat
+  const todayJS = new Date().getDay();
   const { trainingDayIndices, sessions } = programme;
   if (!trainingDayIndices?.length || !sessions?.length) return null;
 
-  // Check today and the next 7 days
   for (let offset = 0; offset < 7; offset++) {
     const dayIdx = (todayJS + offset) % 7;
     const sessionPos = trainingDayIndices.indexOf(dayIdx);
@@ -494,6 +445,36 @@ const styles = StyleSheet.create({
     textTransform: 'uppercase',
     marginBottom: SPACING.sm,
   },
+  // Progression card
+  progressionCard: {
+    backgroundColor: COLORS.accent,
+    borderRadius: RADIUS.md,
+    padding: SPACING.lg,
+    gap: SPACING.sm,
+    marginBottom: SPACING.sm,
+  },
+  progressionHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: SPACING.xs,
+  },
+  progressionTag: {
+    fontSize: FONT_SIZE.xs,
+    fontWeight: '900',
+    color: COLORS.background,
+    letterSpacing: 1.5,
+    textTransform: 'uppercase',
+  },
+  progressionText: {
+    fontSize: FONT_SIZE.sm,
+    color: COLORS.background,
+    lineHeight: 20,
+  },
+  progressionHighlight: {
+    fontWeight: '900',
+    color: COLORS.background,
+  },
+  // Today card
   todayCard: {
     backgroundColor: COLORS.surface,
     borderRadius: RADIUS.md,
@@ -544,64 +525,6 @@ const styles = StyleSheet.create({
   bwSeeMore: { fontSize: FONT_SIZE.xs, color: COLORS.accent, fontWeight: '600' },
   bwWidgetEmpty: { flexDirection: 'row', alignItems: 'center', gap: SPACING.sm },
   bwEmptyText: { fontSize: FONT_SIZE.sm, color: COLORS.textMuted },
-  // Water widget
-  waterWidget: {
-    backgroundColor: COLORS.surface,
-    borderRadius: RADIUS.md,
-    borderWidth: 1,
-    borderColor: COLORS.border,
-    padding: SPACING.lg,
-    gap: SPACING.sm,
-  },
-  waterInfo: {
-    flexDirection: 'row',
-    alignItems: 'baseline',
-    gap: SPACING.xs,
-  },
-  waterAmount: { fontSize: FONT_SIZE.xxl, fontWeight: '900', color: '#4dd0e1' },
-  waterGoal: { fontSize: FONT_SIZE.sm, color: COLORS.textSecondary },
-  waterProgressBar: {
-    height: 8,
-    backgroundColor: COLORS.border,
-    borderRadius: RADIUS.full,
-    overflow: 'hidden',
-  },
-  waterProgressFill: {
-    height: '100%',
-    backgroundColor: '#4dd0e1',
-    borderRadius: RADIUS.full,
-  },
-  waterProgressComplete: { backgroundColor: COLORS.success },
-  waterButtons: {
-    flexDirection: 'row',
-    gap: SPACING.sm,
-    marginTop: SPACING.xs,
-  },
-  waterBtn: {
-    flex: 1,
-    paddingVertical: SPACING.sm,
-    borderRadius: RADIUS.sm,
-    borderWidth: 1,
-    borderColor: COLORS.border,
-    backgroundColor: COLORS.surfaceAlt,
-    alignItems: 'center',
-  },
-  waterBtnCustom: {
-    borderColor: COLORS.accent + '40',
-    backgroundColor: COLORS.accentDim,
-  },
-  waterBtnText: {
-    fontSize: FONT_SIZE.sm,
-    fontWeight: '700',
-    color: COLORS.textSecondary,
-  },
-  waterComplete: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: SPACING.xs,
-    marginTop: SPACING.xs,
-  },
-  waterCompleteText: { fontSize: FONT_SIZE.xs, color: COLORS.success, fontWeight: '600' },
   // Saved programme card
   savedProgrammeCard: {
     backgroundColor: COLORS.surface,
@@ -649,6 +572,30 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+  // Stats row
+  statsRow: {
+    flexDirection: 'row',
+    marginHorizontal: SPACING.xl,
+    gap: SPACING.md,
+    marginBottom: SPACING.xl,
+  },
+  statCard: {
+    flex: 1,
+    backgroundColor: COLORS.surface,
+    borderRadius: RADIUS.md,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    padding: SPACING.md,
+    alignItems: 'center',
+  },
+  statValue: { fontSize: FONT_SIZE.xl, fontWeight: '900', color: COLORS.text },
+  statLabel: {
+    fontSize: FONT_SIZE.xs,
+    color: COLORS.textMuted,
+    marginTop: 2,
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+  },
   // Session card
   sessionCard: {
     backgroundColor: COLORS.surface,
@@ -676,30 +623,6 @@ const styles = StyleSheet.create({
     borderTopColor: COLORS.border,
   },
   viewDetails: { fontSize: FONT_SIZE.sm, color: COLORS.accent, fontWeight: '600' },
-  // Stats row
-  statsRow: {
-    flexDirection: 'row',
-    marginHorizontal: SPACING.xl,
-    gap: SPACING.md,
-    marginBottom: SPACING.xl,
-  },
-  statCard: {
-    flex: 1,
-    backgroundColor: COLORS.surface,
-    borderRadius: RADIUS.md,
-    borderWidth: 1,
-    borderColor: COLORS.border,
-    padding: SPACING.md,
-    alignItems: 'center',
-  },
-  statValue: { fontSize: FONT_SIZE.xl, fontWeight: '900', color: COLORS.text },
-  statLabel: {
-    fontSize: FONT_SIZE.xs,
-    color: COLORS.textMuted,
-    marginTop: 2,
-    textTransform: 'uppercase',
-    letterSpacing: 0.5,
-  },
   emptyState: {
     marginHorizontal: SPACING.xl,
     alignItems: 'center',

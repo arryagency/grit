@@ -45,7 +45,7 @@ const TIME_ITEM_H = 52;
 const PICKER_VISIBLE = 5; // odd number so middle item is the selected one
 const PICKER_H = TIME_ITEM_H * PICKER_VISIBLE;
 
-const TOTAL_STEPS = 6;
+const TOTAL_STEPS = 7;
 
 export default function OnboardingScreen() {
   const [step, setStep] = useState(0);
@@ -55,6 +55,7 @@ export default function OnboardingScreen() {
   const [equipment, setEquipment] = useState('');
   const [gymTime, setGymTime] = useState('');
   const [injuries, setInjuries] = useState('');
+  const [userMode, setUserMode] = useState<'guided' | 'self' | ''>('');
   const [saving, setSaving] = useState(false);
 
   async function handleFinish() {
@@ -68,6 +69,7 @@ export default function OnboardingScreen() {
       injuries,
       onboardingComplete: true,
       createdAt: new Date().toISOString(),
+      userMode: (userMode as 'guided' | 'self') || 'guided',
     };
     await saveProfile(profile);
     router.replace('/(tabs)');
@@ -79,6 +81,8 @@ export default function OnboardingScreen() {
     if (step === 2) return goal !== '';
     if (step === 3) return equipment !== '';
     if (step === 4) return true; // gym time is optional
+    if (step === 5) return true; // injuries optional
+    if (step === 6) return userMode !== '';
     return true;
   }
 
@@ -225,6 +229,40 @@ export default function OnboardingScreen() {
                 multiline
                 numberOfLines={3}
               />
+            </View>
+          )}
+
+          {/* Step 6 – How to use GRIT */}
+          {step === 6 && (
+            <View style={styles.stepContainer}>
+              <Text style={styles.stepLabel}>Step 7 of {TOTAL_STEPS}</Text>
+              <Text style={styles.question}>How do you want to use GRIT?</Text>
+              <Text style={styles.subText}>You can change this later in Settings.</Text>
+              {(
+                [
+                  {
+                    value: 'guided' as const,
+                    label: 'Build me a programme',
+                    sub: 'Get a personalised training plan, progressive overload guidance, and full coaching features.',
+                  },
+                  {
+                    value: 'self' as const,
+                    label: "I'll plan my own workouts",
+                    sub: 'Just tracking — log sessions, track PRs, and monitor progress your way.',
+                  },
+                ]
+              ).map((opt) => (
+                <TouchableOpacity
+                  key={opt.value}
+                  style={[styles.optionCard, userMode === opt.value && styles.optionCardActive]}
+                  onPress={() => setUserMode(opt.value)}
+                >
+                  <Text style={[styles.optionLabel, userMode === opt.value && styles.optionLabelActive]}>
+                    {opt.label}
+                  </Text>
+                  <Text style={styles.optionSub}>{opt.sub}</Text>
+                </TouchableOpacity>
+              ))}
             </View>
           )}
         </ScrollView>

@@ -13,6 +13,7 @@ export interface UserProfile {
   injuries: string;
   onboardingComplete: boolean;
   createdAt: string;
+  userMode?: 'guided' | 'self'; // 'guided' = wants programme/suggestions, 'self' = just tracking
 }
 
 export interface SetLog {
@@ -81,6 +82,26 @@ export interface AppSettings {
   waterGoal: number;        // ml, default 2500
 }
 
+export interface NotificationSettings {
+  trainingDayReminder: boolean;   // default true
+  missedSessionAlert: boolean;    // default false
+  streakProtection: boolean;      // default false
+  progressionSuggestions: boolean; // default false
+  creatineReminder: boolean;      // default false
+  creatineReminderTime: string;   // "HH:MM", default "08:00"
+  customReminder: boolean;        // default false
+  customReminderText: string;
+  customReminderTime: string;     // "HH:MM"
+}
+
+export interface ProgressionSuggestion {
+  exercise: string;
+  currentWeight: number;
+  suggestedWeight: number;
+  message: string;
+  createdAt: string;
+}
+
 export interface SavedProgramme {
   programme: import('./programmeBuilder').Programme;
   savedAt: string; // ISO string
@@ -107,6 +128,8 @@ const KEYS = {
   SETTINGS: '@grit/settings',
   SAVED_PROGRAMME: '@grit/savedProgramme',
   PROGRAMME_PREFS: '@grit/programmePrefs',
+  NOTIFICATION_SETTINGS: '@grit/notificationSettings',
+  PROGRESSION_SUGGESTIONS: '@grit/progressionSuggestions',
 };
 
 // ─── Profile ─────────────────────────────────────────────────────────────────
@@ -517,4 +540,80 @@ export function getLastSessionForExercise(
     if (found) return found;
   }
   return null;
+}
+
+// ─── Manual PR ────────────────────────────────────────────────────────────────
+
+export async function savePRManually(
+  exercise: string,
+  weight: number,
+  reps: number
+): Promise<void> {
+  const prs = await getPRs();
+  const volume = weight * reps;
+  const existing = prs[exercise];
+  if (!existing || volume > existing.volume) {
+    prs[exercise] = { weight, reps, date: new Date().toISOString(), volume };
+    await AsyncStorage.setItem(KEYS.PRS, JSON.stringify(prs));
+  }
+}
+
+// ─── Notification Settings ────────────────────────────────────────────────────
+
+const DEFAULT_NOTIFICATION_SETTINGS: NotificationSettings = {
+  trainingDayReminder: true,
+  missedSessionAlert: false,
+  streakProtection: false,
+  progressionSuggestions: false,
+  creatineReminder: false,
+  creatineReminderTime: '08:00',
+  customReminder: false,
+  customReminderText: '',
+  customReminderTime: '09:00',
+};
+
+export async function getNotificationSettings(): Promise<NotificationSettings> {
+  try {
+    const data = await AsyncStorage.getItem(KEYS.NOTIFICATION_SETTINGS);
+    return data
+      ? { ...DEFAULT_NOTIFICATION_SETTINGS, ...JSON.parse(data) }
+      : DEFAULT_NOTIFICATION_SETTINGS;
+  } catch {
+    return DEFAULT_NOTIFICATION_SETTINGS;
+  }
+}
+
+export async function saveNotificationSettings(
+  settings: Partial<NotificationSettings>
+): Promise<void> {
+  const current = await getNotificationSettings();
+  await AsyncStorage.setItem(
+    KEYS.NOTIFICATION_SETTINGS,
+    JSON.stringify({ ...current, ...settings })
+  );
+}
+
+// ─── Progression Suggestions ──────────────────────────────────────────────────
+
+export async function getProgressionSuggestions(): Promise<ProgressionSuggestion[]> {
+  try {
+    const data = await AsyncStorage.getItem(KEYS.PROGRESSION_SUGGESTIONS);
+    return data ? JSON.parse(data) : [];
+  } catch {
+    return [];
+  }
+}
+
+export async function saveProgressionSuggestions(
+  suggestions: ProgressionSuggestion[]
+): Promise<void> {
+  await AsyncStorage.setItem(KEYS.PROGRESSION_SUGGESTIONS, JSON.stringify(suggestions));
+}
+
+export async function clearProgressionSuggestion(exercise: string): Promise<void> {
+  const suggestions = await getProgressionSuggestions();
+  const updated = suggestions.filter(
+    (s) => s.exercise.toLowerCase() !== exercise.toLowerCase()
+  );
+  await AsyncStorage.setItem(KEYS.PROGRESSION_SUGGESTIONS, JSON.stringify(updated));
 }
