@@ -25,6 +25,8 @@ import {
   getBodyWeightTrend,
   getTodayWater,
   addWater,
+  getSavedProgramme,
+  SavedProgramme,
   BodyWeightEntry,
   WaterEntry,
 } from '@/utils/storage';
@@ -57,18 +59,21 @@ export default function HomeScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const [bodyWeightEntries, setBodyWeightEntries] = useState<BodyWeightEntry[]>([]);
   const [water, setWater] = useState<WaterEntry>({ date: '', amount: 0, goal: 2500 });
+  const [savedProgramme, setSavedProgramme] = useState<SavedProgramme | null>(null);
 
   async function load() {
-    const [p, s, bw, w] = await Promise.all([
+    const [p, s, bw, w, sp] = await Promise.all([
       getProfile(),
       getSessions(),
       getBodyWeightEntries(),
       getTodayWater(),
+      getSavedProgramme(),
     ]);
     setProfile(p);
     setSessions(s);
     setBodyWeightEntries(bw);
     setWater(w);
+    setSavedProgramme(sp);
   }
 
   useFocusEffect(
@@ -277,7 +282,34 @@ export default function HomeScreen() {
           </View>
         </View>
 
-        {/* AI Programme card */}
+        {/* Saved programme card */}
+        {savedProgramme && (
+          <View style={styles.section}>
+            <Text style={styles.sectionLabel}>My Programme</Text>
+            <TouchableOpacity
+              style={styles.savedProgrammeCard}
+              onPress={() => router.push('/programme')}
+              activeOpacity={0.7}
+            >
+              <View style={styles.savedProgrammeLeft}>
+                <Text style={styles.savedProgrammeTitle}>{savedProgramme.programme.title}</Text>
+                <Text style={styles.savedProgrammeSplit}>{savedProgramme.programme.splitName}</Text>
+                <View style={styles.savedProgrammeMeta}>
+                  {getNextSession(savedProgramme.programme) && (
+                    <Text style={styles.savedProgrammeNext}>
+                      {getNextSession(savedProgramme.programme)}
+                    </Text>
+                  )}
+                </View>
+              </View>
+              <View style={styles.savedProgrammeArrow}>
+                <Ionicons name="chevron-forward" size={18} color={COLORS.accent} />
+              </View>
+            </TouchableOpacity>
+          </View>
+        )}
+
+        {/* Programme builder CTA */}
         <View style={styles.section}>
           <TouchableOpacity
             style={styles.programmeCard}
@@ -285,9 +317,13 @@ export default function HomeScreen() {
             activeOpacity={0.7}
           >
             <View style={styles.programmeLeft}>
-              <Text style={styles.programmeTitle}>Build my programme</Text>
+              <Text style={styles.programmeTitle}>
+                {savedProgramme ? 'Rebuild my programme' : 'Build my programme'}
+              </Text>
               <Text style={styles.programmeSubtitle}>
-                AI-generated plan built around your schedule, goal, and availability
+                {savedProgramme
+                  ? 'Generate a new programme with different settings'
+                  : 'Get a personalised plan built around your goal and schedule'}
               </Text>
             </View>
             <View style={styles.programmeIcon}>
@@ -366,6 +402,24 @@ export default function HomeScreen() {
       </ScrollView>
     </SafeAreaView>
   );
+}
+
+function getNextSession(programme: import('@/utils/programmeBuilder').Programme): string | null {
+  const todayJS = new Date().getDay(); // 0=Sun, 1=Mon...6=Sat
+  const { trainingDayIndices, sessions } = programme;
+  if (!trainingDayIndices?.length || !sessions?.length) return null;
+
+  // Check today and the next 7 days
+  for (let offset = 0; offset < 7; offset++) {
+    const dayIdx = (todayJS + offset) % 7;
+    const sessionPos = trainingDayIndices.indexOf(dayIdx);
+    if (sessionPos !== -1) {
+      const session = sessions[sessionPos % sessions.length];
+      const label = offset === 0 ? 'Today' : offset === 1 ? 'Tomorrow' : DAY_LABELS[(todayJS + offset) % 7];
+      return `${label}: ${session.label}`;
+    }
+  }
+  return null;
 }
 
 function getGreeting() {
@@ -548,6 +602,25 @@ const styles = StyleSheet.create({
     marginTop: SPACING.xs,
   },
   waterCompleteText: { fontSize: FONT_SIZE.xs, color: COLORS.success, fontWeight: '600' },
+  // Saved programme card
+  savedProgrammeCard: {
+    backgroundColor: COLORS.surface,
+    borderRadius: RADIUS.md,
+    borderWidth: 1,
+    borderColor: COLORS.accent + '40',
+    borderLeftWidth: 3,
+    borderLeftColor: COLORS.accent,
+    padding: SPACING.lg,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: SPACING.md,
+  },
+  savedProgrammeLeft: { flex: 1, gap: 3 },
+  savedProgrammeTitle: { fontSize: FONT_SIZE.md, fontWeight: '900', color: COLORS.text },
+  savedProgrammeSplit: { fontSize: FONT_SIZE.sm, color: COLORS.textSecondary },
+  savedProgrammeMeta: { marginTop: 3 },
+  savedProgrammeNext: { fontSize: FONT_SIZE.sm, color: COLORS.accent, fontWeight: '700' },
+  savedProgrammeArrow: { opacity: 0.8 },
   // Programme card
   programmeCard: {
     flexDirection: 'row',

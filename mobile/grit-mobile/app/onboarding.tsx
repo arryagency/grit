@@ -12,10 +12,10 @@ import {
 import { useState, useRef, useEffect, memo } from 'react';
 import { router } from 'expo-router';
 import { saveProfile, UserProfile } from '@/utils/storage';
-import { scheduleWorkoutNotifications } from '@/utils/notifications';
+// notifications are scheduled when programme is saved, not at onboarding
 import { COLORS, SPACING, FONT_SIZE, RADIUS } from '@/constants/theme';
 
-const DAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+// day labels removed — days are selected in programme builder
 const EQUIPMENT_OPTIONS = ['Full gym', 'Dumbbells only', 'Barbell + rack', 'Bodyweight only', 'Mixed/home gym'];
 const GOAL_OPTIONS = ['Build strength', 'Build muscle', 'Lose fat', 'Athletic performance', 'General fitness'];
 
@@ -45,25 +45,17 @@ const TIME_ITEM_H = 52;
 const PICKER_VISIBLE = 5; // odd number so middle item is the selected one
 const PICKER_H = TIME_ITEM_H * PICKER_VISIBLE;
 
-const TOTAL_STEPS = 7;
+const TOTAL_STEPS = 6;
 
 export default function OnboardingScreen() {
   const [step, setStep] = useState(0);
   const [name, setName] = useState('');
   const [trainingAge, setTrainingAge] = useState<'beginner' | 'intermediate' | 'advanced' | ''>('');
   const [goal, setGoal] = useState('');
-  const [daysPerWeek, setDaysPerWeek] = useState(3);
-  const [trainingDays, setTrainingDays] = useState<number[]>([1, 3, 5]); // Mon, Wed, Fri
   const [equipment, setEquipment] = useState('');
   const [gymTime, setGymTime] = useState('');
   const [injuries, setInjuries] = useState('');
   const [saving, setSaving] = useState(false);
-
-  function toggleDay(day: number) {
-    setTrainingDays((prev) =>
-      prev.includes(day) ? prev.filter((d) => d !== day) : [...prev, day]
-    );
-  }
 
   async function handleFinish() {
     setSaving(true);
@@ -71,8 +63,6 @@ export default function OnboardingScreen() {
       name: name.trim() || 'Athlete',
       trainingAge: trainingAge as UserProfile['trainingAge'],
       goal,
-      daysPerWeek,
-      trainingDays: trainingDays.sort(),
       gymTime: gymTime || undefined,
       equipment,
       injuries,
@@ -80,7 +70,6 @@ export default function OnboardingScreen() {
       createdAt: new Date().toISOString(),
     };
     await saveProfile(profile);
-    await scheduleWorkoutNotifications(trainingDays, gymTime || undefined).catch(() => {});
     router.replace('/(tabs)');
   }
 
@@ -88,9 +77,8 @@ export default function OnboardingScreen() {
     if (step === 0) return name.trim().length > 0;
     if (step === 1) return trainingAge !== '';
     if (step === 2) return goal !== '';
-    if (step === 3) return trainingDays.length > 0;
-    if (step === 4) return equipment !== '';
-    if (step === 5) return true; // gym time is optional
+    if (step === 3) return equipment !== '';
+    if (step === 4) return true; // gym time is optional
     return true;
   }
 
@@ -181,33 +169,10 @@ export default function OnboardingScreen() {
             </View>
           )}
 
-          {/* Step 3 – Training days */}
+          {/* Step 3 – Equipment */}
           {step === 3 && (
             <View style={styles.stepContainer}>
               <Text style={styles.stepLabel}>Step 4 of {TOTAL_STEPS}</Text>
-              <Text style={styles.question}>Which days do you train?</Text>
-              <Text style={styles.subText}>Tap to toggle. We'll schedule reminders around this.</Text>
-              <View style={styles.daysGrid}>
-                {DAY_LABELS.map((label, i) => (
-                  <TouchableOpacity
-                    key={i}
-                    style={[styles.dayButton, trainingDays.includes(i) && styles.dayButtonActive]}
-                    onPress={() => toggleDay(i)}
-                  >
-                    <Text style={[styles.dayLabel, trainingDays.includes(i) && styles.dayLabelActive]}>
-                      {label}
-                    </Text>
-                  </TouchableOpacity>
-                ))}
-              </View>
-              <Text style={styles.subText}>{trainingDays.length} day{trainingDays.length !== 1 ? 's' : ''} selected</Text>
-            </View>
-          )}
-
-          {/* Step 4 – Equipment */}
-          {step === 4 && (
-            <View style={styles.stepContainer}>
-              <Text style={styles.stepLabel}>Step 5 of {TOTAL_STEPS}</Text>
               <Text style={styles.question}>What equipment do you have access to?</Text>
               {EQUIPMENT_OPTIONS.map((e) => (
                 <TouchableOpacity
@@ -221,10 +186,10 @@ export default function OnboardingScreen() {
             </View>
           )}
 
-          {/* Step 5 – Gym time */}
-          {step === 5 && (
+          {/* Step 4 – Gym time */}
+          {step === 4 && (
             <View style={styles.stepContainer}>
-              <Text style={styles.stepLabel}>Step 6 of {TOTAL_STEPS}</Text>
+              <Text style={styles.stepLabel}>Step 5 of {TOTAL_STEPS}</Text>
               <Text style={styles.question}>What time do you usually train?</Text>
               <Text style={styles.subText}>
                 We'll send a heads-up 15 mins before, and check in if you skip.
@@ -245,10 +210,10 @@ export default function OnboardingScreen() {
             </View>
           )}
 
-          {/* Step 6 – Injuries */}
-          {step === 6 && (
+          {/* Step 5 – Injuries */}
+          {step === 5 && (
             <View style={styles.stepContainer}>
-              <Text style={styles.stepLabel}>Step 7 of {TOTAL_STEPS}</Text>
+              <Text style={styles.stepLabel}>Step 6 of {TOTAL_STEPS}</Text>
               <Text style={styles.question}>Any injuries or limitations to know about?</Text>
               <Text style={styles.subText}>Optional. Skip if nothing relevant.</Text>
               <TextInput

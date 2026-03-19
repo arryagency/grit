@@ -101,38 +101,24 @@ export async function scheduleWorkoutNotifications(
     const Notifications = getNotifications();
     await Notifications.cancelAllScheduledNotificationsAsync();
 
+    // Parse gymTime or default to 07:00
+    const [notifH, notifM] = gymTime
+      ? gymTime.split(':').map(Number)
+      : [7, 0];
+
     for (const day of trainingDays) {
       const expoWeekday = (day + 1) as 1 | 2 | 3 | 4 | 5 | 6 | 7;
 
-      // 08:00 training day reminder
+      // Training day reminder at gymTime (default 07:00)
       await Notifications.scheduleNotificationAsync({
-        content: { title: 'GRIT', body: pick(TRAINING_DAY_MESSAGES) },
+        content: { title: 'GRIT', body: 'Training day. Get in.' },
         trigger: {
           type: 'weekly' as const,
           weekday: expoWeekday,
-          hour: 8,
-          minute: 0,
+          hour: notifH,
+          minute: notifM,
         } as any,
       });
-
-      // 15-min "you train soon" reminder if gym time set
-      if (gymTime) {
-        const [h, m] = gymTime.split(':').map(Number);
-        let reminderH = h;
-        let reminderM = m - 15;
-        if (reminderM < 0) { reminderM += 60; reminderH -= 1; }
-        if (reminderH >= 0) {
-          await Notifications.scheduleNotificationAsync({
-            content: { title: 'GRIT', body: 'You train in 15 minutes. No excuse.' },
-            trigger: {
-              type: 'weekly' as const,
-              weekday: expoWeekday,
-              hour: reminderH,
-              minute: reminderM,
-            } as any,
-          });
-        }
-      }
     }
 
     console.log('[GRIT notifications] scheduled', trainingDays.length, 'training days');

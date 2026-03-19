@@ -6,8 +6,8 @@ export interface UserProfile {
   name: string;
   trainingAge: 'beginner' | 'intermediate' | 'advanced';
   goal: string;
-  daysPerWeek: number;
-  trainingDays: number[]; // 0=Sun, 1=Mon, 2=Tue, 3=Wed, 4=Thu, 5=Fri, 6=Sat
+  daysPerWeek?: number;
+  trainingDays?: number[]; // 0=Sun, 1=Mon, 2=Tue, 3=Wed, 4=Thu, 5=Fri, 6=Sat
   gymTime?: string; // "HH:MM" 24-hour, e.g. "18:00"
   equipment: string;
   injuries: string;
@@ -81,6 +81,18 @@ export interface AppSettings {
   waterGoal: number;        // ml, default 2500
 }
 
+export interface SavedProgramme {
+  programme: import('./programmeBuilder').Programme;
+  savedAt: string; // ISO string
+}
+
+export interface ProgrammePrefs {
+  goal: import('./programmeBuilder').Goal;
+  experience: import('./programmeBuilder').Experience;
+  daysPerWeek: import('./programmeBuilder').TrainingDays;
+  gender: import('./programmeBuilder').Gender;
+}
+
 // ─── Keys ────────────────────────────────────────────────────────────────────
 
 const KEYS = {
@@ -92,6 +104,8 @@ const KEYS = {
   TEMPLATES: '@grit/templates',
   PHYSIQUE: '@grit/physique',
   SETTINGS: '@grit/settings',
+  SAVED_PROGRAMME: '@grit/savedProgramme',
+  PROGRAMME_PREFS: '@grit/programmePrefs',
 };
 
 // ─── Profile ─────────────────────────────────────────────────────────────────
@@ -354,6 +368,41 @@ export async function getSettings(): Promise<AppSettings> {
 export async function saveSettings(settings: Partial<AppSettings>): Promise<void> {
   const current = await getSettings();
   await AsyncStorage.setItem(KEYS.SETTINGS, JSON.stringify({ ...current, ...settings }));
+}
+
+// ─── Saved Programme ─────────────────────────────────────────────────────────
+
+export async function getSavedProgramme(): Promise<SavedProgramme | null> {
+  try {
+    const data = await AsyncStorage.getItem(KEYS.SAVED_PROGRAMME);
+    return data ? JSON.parse(data) : null;
+  } catch {
+    return null;
+  }
+}
+
+export async function saveProgramme(programme: SavedProgramme['programme']): Promise<void> {
+  const entry: SavedProgramme = { programme, savedAt: new Date().toISOString() };
+  await AsyncStorage.setItem(KEYS.SAVED_PROGRAMME, JSON.stringify(entry));
+}
+
+export async function deleteSavedProgramme(): Promise<void> {
+  await AsyncStorage.removeItem(KEYS.SAVED_PROGRAMME);
+}
+
+// ─── Programme Prefs ─────────────────────────────────────────────────────────
+
+export async function getProgrammePrefs(): Promise<ProgrammePrefs | null> {
+  try {
+    const data = await AsyncStorage.getItem(KEYS.PROGRAMME_PREFS);
+    return data ? JSON.parse(data) : null;
+  } catch {
+    return null;
+  }
+}
+
+export async function saveProgrammePrefs(prefs: ProgrammePrefs): Promise<void> {
+  await AsyncStorage.setItem(KEYS.PROGRAMME_PREFS, JSON.stringify(prefs));
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────

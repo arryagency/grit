@@ -461,19 +461,29 @@ export default function ProgressScreen() {
               </TouchableOpacity>
             </View>
             <Text style={styles.modalSubtitle}>Enter your weight in kg</Text>
-            <View style={{ backgroundColor: '#222222', borderRadius: 10, borderWidth: 1, borderColor: '#444444' }}>
-              <TextInput
-                style={[styles.weightInput, { color: '#ffffff', backgroundColor: 'transparent' }]}
-                value={weightInput}
-                onChangeText={setWeightInput}
-                keyboardType="decimal-pad"
-                placeholder="e.g. 82.5"
-                placeholderTextColor="#888888"
-                autoFocus
-                returnKeyType="done"
-                onSubmitEditing={handleLogWeight}
-              />
-            </View>
+            <TextInput
+              keyboardType="decimal-pad"
+              value={weightInput}
+              onChangeText={setWeightInput}
+              placeholder="82.5"
+              placeholderTextColor="#666666"
+              style={{
+                color: '#ffffff',
+                fontSize: 32,
+                fontWeight: 'bold',
+                textAlign: 'center',
+                backgroundColor: '#222222',
+                borderRadius: 12,
+                padding: 20,
+                marginVertical: 16,
+                borderWidth: 2,
+                borderColor: '#e8ff00',
+                width: '100%',
+              }}
+              autoFocus
+              returnKeyType="done"
+              onSubmitEditing={handleLogWeight}
+            />
             <TouchableOpacity style={styles.logBtn} onPress={handleLogWeight}>
               <Text style={styles.logBtnText}>Save</Text>
             </TouchableOpacity>
