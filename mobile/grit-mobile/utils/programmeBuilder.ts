@@ -588,7 +588,11 @@ function convertSession(
 
 export function buildProgramme(input: ProgrammeInput): Programme {
   const { goal, experience, daysPerWeek, gender } = input;
-  const { sessions: rawSessions, split, trainingDayIndices } = selectTemplate(daysPerWeek, experience);
+  const { sessions: rawSessions, split, trainingDayIndices: defaultIndices } = selectTemplate(daysPerWeek, experience);
+  // Use user-selected days if provided, otherwise fall back to template defaults
+  const trainingDayIndices = (input.trainingDays && input.trainingDays.length === daysPerWeek)
+    ? input.trainingDays
+    : defaultIndices;
 
   const goalLabel: Record<Goal, string> = {
     muscle: 'Muscle Building',

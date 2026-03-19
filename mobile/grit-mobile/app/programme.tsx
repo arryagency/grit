@@ -35,6 +35,7 @@ interface Answers {
   goal: Goal | null;
   experience: Experience | null;
   daysPerWeek: TrainingDays | null;
+  trainingDays: number[] | null; // specific weekday indices 1=Mon…6=Sat
   gender: Gender | null;
 }
 
@@ -66,6 +67,16 @@ const GENDER_OPTIONS: { value: Gender; label: string; description: string }[] = 
   { value: 'female', label: 'Female', description: '+20% volume, higher rep ranges, shorter rest, glute priority.' },
 ];
 
+const WEEKDAYS: { index: number; short: string; long: string }[] = [
+  { index: 1, short: 'MON', long: 'Monday' },
+  { index: 2, short: 'TUE', long: 'Tuesday' },
+  { index: 3, short: 'WED', long: 'Wednesday' },
+  { index: 4, short: 'THU', long: 'Thursday' },
+  { index: 5, short: 'FRI', long: 'Friday' },
+  { index: 6, short: 'SAT', long: 'Saturday' },
+  { index: 0, short: 'SUN', long: 'Sunday' },
+];
+
 const LOADING_MESSAGES = [
   'Analysing your training profile…',
   'Calculating optimal volume…',
@@ -94,7 +105,7 @@ const MUSCLE_GROUP_COLORS: Record<string, string> = {
 export default function ProgrammeScreen() {
   const [step, setStep] = useState(-1); // -1 = loading profile
   const [answers, setAnswers] = useState<Answers>({
-    goal: null, experience: null, daysPerWeek: null, gender: null,
+    goal: null, experience: null, daysPerWeek: null, trainingDays: null, gender: null,
   });
   const [generating, setGenerating] = useState(false);
   const [programme, setProgramme] = useState<Programme | null>(null);
@@ -119,18 +130,18 @@ export default function ProgrammeScreen() {
       // training frequency) is not the same as programme days. Only use a
       // previously saved programme-builder pref, or leave null so the user
       // must pick explicitly.
-      const goalSource        = prefs?.goal        ?? mapProfileGoal(profile?.goal) ?? null;
-      const experienceSource  = prefs?.experience  ?? (profile?.trainingAge as Experience) ?? null;
-      const daysSource        = prefs?.daysPerWeek ?? null; // never read from profile
-      const genderSource      = prefs?.gender      ?? null;
-
-      console.log('[Programme] pre-fill sources — goal:', goalSource, '| exp:', experienceSource, '| days:', daysSource, '(from prefs only, NOT profile) | gender:', genderSource);
+      const goalSource         = prefs?.goal         ?? mapProfileGoal(profile?.goal) ?? null;
+      const experienceSource   = prefs?.experience   ?? (profile?.trainingAge as Experience) ?? null;
+      const daysSource         = prefs?.daysPerWeek  ?? null; // never read from profile
+      const trainingDaysSource = prefs?.trainingDays ?? null;
+      const genderSource       = prefs?.gender       ?? null;
 
       const prefilled: Answers = {
-        goal:        goalSource,
-        experience:  experienceSource,
-        daysPerWeek: daysSource,
-        gender:      genderSource,
+        goal:         goalSource,
+        experience:   experienceSource,
+        daysPerWeek:  daysSource,
+        trainingDays: trainingDaysSource,
+        gender:       genderSource,
       };
       setAnswers(prefilled);
 
@@ -138,17 +149,17 @@ export default function ProgrammeScreen() {
       if (existing) {
         setProgramme(existing.programme);
         setSaved(true);
-        setStep(4);
+        setStep(5);
         return;
       }
 
       // Always show questions so the user explicitly confirms their selection.
-      // Pre-filled answers are shown as pre-selected but never auto-generated —
-      // that was silently overriding whatever the user wanted to change.
       const firstBlank =
-        prefilled.goal        === null ? 0 :
-        prefilled.experience  === null ? 1 :
-        prefilled.daysPerWeek === null ? 2 : 3;
+        prefilled.goal         === null ? 0 :
+        prefilled.experience   === null ? 1 :
+        prefilled.daysPerWeek  === null ? 2 :
+        prefilled.trainingDays === null ? 3 :
+        prefilled.gender       === null ? 4 : 4;
       setStep(firstBlank);
     }
     init();
@@ -166,19 +177,16 @@ export default function ProgrammeScreen() {
 
   // ── Generate ──────────────────────────────────────────────────────
   function runGenerate(a: Answers) {
-    console.log('[Programme] runGenerate called with:', JSON.stringify(a));
-    console.log('[Programme] daysPerWeek being used:', a.daysPerWeek);
-
-    setStep(4);
+    setStep(5);
     setGenerating(true);
     setProgramme(null);
     setSaved(false);
     progressAnim.setValue(0);
 
-    // Capture values immediately to avoid any closure/stale-state issues
     const goal        = a.goal!;
     const experience  = a.experience!;
     const daysPerWeek = a.daysPerWeek!;
+    const trainingDays = a.trainingDays ?? undefined;
     const gender      = a.gender!;
 
     Animated.timing(progressAnim, {
@@ -186,26 +194,16 @@ export default function ProgrammeScreen() {
       duration: 5000,
       useNativeDriver: false,
     }).start(() => {
-      console.log('GENERATING PROGRAMME FOR', daysPerWeek, 'DAYS');
-      const result = buildProgramme({ goal, experience, daysPerWeek, gender });
-      console.log('[Programme] result daysPerWeek =', result.daysPerWeek, '| sessions =', result.sessions.length);
+      const result = buildProgramme({ goal, experience, daysPerWeek, trainingDays, gender });
       setProgramme(result);
       setGenerating(false);
-      saveProgrammePrefs({ goal, experience, daysPerWeek, gender });
+      saveProgrammePrefs({ goal, experience, daysPerWeek, trainingDays: trainingDays ?? result.trainingDayIndices, gender });
     });
   }
 
   function proceed() {
-    if (step === 3) {
-      // Snapshot answers at this exact moment and pass explicitly
-      const confirmed: Answers = {
-        goal:        answers.goal,
-        experience:  answers.experience,
-        daysPerWeek: answers.daysPerWeek,
-        gender:      answers.gender,
-      };
-      console.log('[Programme] proceed() at step 3, confirmed answers:', JSON.stringify(confirmed));
-      runGenerate(confirmed);
+    if (step === 4) {
+      runGenerate({ ...answers });
       return;
     }
     // Warn beginners who pick 5+ days before advancing
@@ -213,13 +211,17 @@ export default function ProgrammeScreen() {
       setShowBeginnerWarning(true);
       return;
     }
+    // When days/week changes, clear the specific day selection so user must re-pick
+    if (step === 2) {
+      setAnswers(a => ({ ...a, trainingDays: null }));
+    }
     setStep(s => s + 1);
   }
 
   function goBack() {
     if (showBeginnerWarning) { setShowBeginnerWarning(false); return; }
     if (step === 0) { router.back(); return; }
-    if (step < 4) { setStep(s => s - 1); return; }
+    if (step < 5) { setStep(s => s - 1); return; }
     // On result screen — go directly home
     router.replace('/(tabs)/');
   }
@@ -229,17 +231,23 @@ export default function ProgrammeScreen() {
       case 0: return answers.goal !== null;
       case 1: return answers.experience !== null;
       case 2: return answers.daysPerWeek !== null;
-      case 3: return answers.gender !== null;
+      case 3: return (answers.trainingDays?.length ?? 0) === (answers.daysPerWeek ?? 0);
+      case 4: return answers.gender !== null;
       default: return false;
     }
   }
 
   function restart() {
-    setAnswers({ goal: null, experience: null, daysPerWeek: null, gender: null });
+    setAnswers({ goal: null, experience: null, daysPerWeek: null, trainingDays: null, gender: null });
     setProgramme(null);
     setSaved(false);
     progressAnim.setValue(0);
     setStep(0);
+  }
+
+  function editDays() {
+    // Jump back to day picker with current answers preserved
+    setStep(3);
   }
 
   async function handleSave() {
@@ -265,9 +273,9 @@ export default function ProgrammeScreen() {
         </TouchableOpacity>
         <View style={styles.headerCenter}>
           <Text style={styles.headerTitle}>Build my programme</Text>
-          {step < 4 && (
+          {step >= 0 && step < 5 && (
             <Text style={styles.headerStep}>
-              Step {step + 1} of 4
+              Step {step + 1} of 5
             </Text>
           )}
         </View>
@@ -275,9 +283,9 @@ export default function ProgrammeScreen() {
       </View>
 
       {/* Step progress bar */}
-      {step >= 0 && step < 4 && (
+      {step >= 0 && step < 5 && (
         <View style={styles.stepProgressBar}>
-          <View style={[styles.stepProgressFill, { width: `${((step + 1) / 4) * 100}%` }]} />
+          <View style={[styles.stepProgressFill, { width: `${((step + 1) / 5) * 100}%` }]} />
         </View>
       )}
 
@@ -294,8 +302,7 @@ export default function ProgrammeScreen() {
             <TouchableOpacity
               style={[styles.optionCard, styles.optionCardActive]}
               onPress={() => {
-                console.log('[Programme] Warning: user chose recommendation → 3 days');
-                setAnswers(a => ({ ...a, daysPerWeek: 3 }));
+                setAnswers(a => ({ ...a, daysPerWeek: 3, trainingDays: null }));
                 setShowBeginnerWarning(false);
                 setStep(3);
               }}
@@ -314,10 +321,8 @@ export default function ProgrammeScreen() {
             <TouchableOpacity
               style={styles.optionCard}
               onPress={() => {
-                console.log('[Programme] Warning: user kept their choice →', answers.daysPerWeek, 'days');
                 setShowBeginnerWarning(false);
                 setStep(3);
-                // daysPerWeek stays exactly as the user selected — no override
               }}
               activeOpacity={0.7}
             >
@@ -416,8 +421,7 @@ export default function ProgrammeScreen() {
               style={styles.notSureCard}
               onPress={() => {
                 const recommended: TrainingDays = answers.experience === 'beginner' ? 3 : 4;
-                console.log('[Programme] Not sure → setting recommended days:', recommended);
-                setAnswers(a => ({ ...a, daysPerWeek: recommended }));
+                setAnswers(a => ({ ...a, daysPerWeek: recommended, trainingDays: null }));
               }}
               activeOpacity={0.7}
             >
@@ -434,8 +438,63 @@ export default function ProgrammeScreen() {
         </ScrollView>
       )}
 
-      {/* ── Step 3: Gender ── */}
+      {/* ── Step 3: Which days ── */}
       {!showBeginnerWarning && step === 3 && (
+        <ScrollView contentContainerStyle={styles.stepContent}>
+          <Text style={styles.stepTitle}>Which days?</Text>
+          <Text style={styles.stepSubtitle}>
+            Pick exactly {answers.daysPerWeek} day{answers.daysPerWeek === 1 ? '' : 's'}.
+            Your sessions are assigned in order.
+          </Text>
+          <View style={styles.dayPickerGrid}>
+            {WEEKDAYS.map(({ index, short, long }) => {
+              const selected = answers.trainingDays?.includes(index) ?? false;
+              const count = answers.trainingDays?.length ?? 0;
+              const maxReached = count >= (answers.daysPerWeek ?? 0);
+              const disabled = !selected && maxReached;
+              return (
+                <TouchableOpacity
+                  key={index}
+                  style={[styles.dayPickerCell, selected && styles.dayPickerCellActive, disabled && styles.dayPickerCellDisabled]}
+                  onPress={() => {
+                    if (selected) {
+                      setAnswers(a => ({ ...a, trainingDays: (a.trainingDays ?? []).filter(d => d !== index) }));
+                    } else if (!maxReached) {
+                      setAnswers(a => ({
+                        ...a,
+                        trainingDays: [...(a.trainingDays ?? []), index].sort((x, y) => {
+                          // Sort Mon–Sun (treat 0=Sun as 7 for sorting purposes)
+                          const xi = x === 0 ? 7 : x;
+                          const yi = y === 0 ? 7 : y;
+                          return xi - yi;
+                        }),
+                      }));
+                    }
+                  }}
+                  activeOpacity={disabled ? 1 : 0.7}
+                >
+                  <Text style={[styles.dayPickerShort, selected && styles.dayPickerShortActive, disabled && styles.dayPickerTextDisabled]}>{short}</Text>
+                  <Text style={[styles.dayPickerLong, disabled && styles.dayPickerTextDisabled]}>{long}</Text>
+                  {selected && <Ionicons name="checkmark-circle" size={16} color={COLORS.accent} style={{ marginTop: 4 }} />}
+                </TouchableOpacity>
+              );
+            })}
+          </View>
+          {(answers.trainingDays?.length ?? 0) > 0 && (
+            <View style={styles.dayPickerSummary}>
+              <Text style={styles.dayPickerSummaryText}>
+                {answers.trainingDays!.map(d => WEEKDAYS.find(w => w.index === d)?.short).join('  ·  ')}
+              </Text>
+              <Text style={styles.dayPickerSummaryCount}>
+                {answers.trainingDays!.length} / {answers.daysPerWeek} selected
+              </Text>
+            </View>
+          )}
+        </ScrollView>
+      )}
+
+      {/* ── Step 4: Gender ── */}
+      {!showBeginnerWarning && step === 4 && (
         <ScrollView contentContainerStyle={styles.stepContent}>
           <Text style={styles.stepTitle}>Gender</Text>
           <Text style={styles.stepSubtitle}>
@@ -455,8 +514,8 @@ export default function ProgrammeScreen() {
         </ScrollView>
       )}
 
-      {/* ── Step 4: Generating / Result ── */}
-      {!showBeginnerWarning && step === 4 && (
+      {/* ── Step 5: Generating / Result ── */}
+      {!showBeginnerWarning && step === 5 && (
         <ScrollView
           ref={scrollRef}
           contentContainerStyle={styles.resultContent}
@@ -483,13 +542,14 @@ export default function ProgrammeScreen() {
               saved={saved}
               onSave={handleSave}
               onRestart={restart}
+              onEditDays={editDays}
             />
           )}
         </ScrollView>
       )}
 
       {/* Footer button */}
-      {!showBeginnerWarning && step >= 0 && step < 4 && (
+      {!showBeginnerWarning && step >= 0 && step < 5 && (
         <View style={styles.footer}>
           <TouchableOpacity
             style={[styles.nextBtn, !canProceed() && styles.nextBtnDisabled]}
@@ -497,9 +557,9 @@ export default function ProgrammeScreen() {
             disabled={!canProceed()}
           >
             <Text style={styles.nextBtnText}>
-              {step === 3 ? 'Build my programme' : 'Next'}
+              {step === 4 ? 'Build my programme' : 'Next'}
             </Text>
-            {step === 3 && <Ionicons name="flash" size={16} color={COLORS.background} />}
+            {step === 4 && <Ionicons name="flash" size={16} color={COLORS.background} />}
           </TouchableOpacity>
         </View>
       )}
@@ -528,12 +588,13 @@ function OptionCard({
 }
 
 function ProgrammeResult({
-  programme, saved, onSave, onRestart,
+  programme, saved, onSave, onRestart, onEditDays,
 }: {
   programme: Programme;
   saved: boolean;
   onSave: () => void;
   onRestart: () => void;
+  onEditDays: () => void;
 }) {
   const goalLabel: Record<string, string> = {
     muscle: 'Muscle', strength: 'Strength', 'fat-loss': 'Fat Loss', fitness: 'Fitness',
@@ -605,10 +666,17 @@ function ProgrammeResult({
             <Text style={styles.savedBadgeText}>Saved to home screen</Text>
           </View>
         )}
-        <TouchableOpacity style={styles.restartBtn} onPress={onRestart}>
-          <Ionicons name="refresh" size={14} color={COLORS.textSecondary} />
-          <Text style={styles.restartBtnText}>Build a different one</Text>
-        </TouchableOpacity>
+        <View style={styles.secondaryActions}>
+          <TouchableOpacity style={styles.secondaryBtn} onPress={onEditDays}>
+            <Ionicons name="calendar-outline" size={14} color={COLORS.textSecondary} />
+            <Text style={styles.secondaryBtnText}>Edit days</Text>
+          </TouchableOpacity>
+          <View style={styles.secondaryDivider} />
+          <TouchableOpacity style={styles.secondaryBtn} onPress={onRestart}>
+            <Ionicons name="refresh" size={14} color={COLORS.textSecondary} />
+            <Text style={styles.secondaryBtnText}>Rebuild</Text>
+          </TouchableOpacity>
+        </View>
       </View>
       <View style={{ height: 48 }} />
     </>
@@ -936,9 +1004,49 @@ const styles = StyleSheet.create({
     backgroundColor: COLORS.surface, borderWidth: 1, borderColor: COLORS.success + '40',
   },
   savedBadgeText: { fontSize: FONT_SIZE.md, fontWeight: '700', color: COLORS.success },
-  restartBtn: {
+  secondaryActions: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
-    gap: SPACING.sm, paddingVertical: SPACING.md,
+    backgroundColor: COLORS.surface, borderRadius: RADIUS.md,
+    borderWidth: 1, borderColor: COLORS.border,
   },
-  restartBtnText: { fontSize: FONT_SIZE.sm, color: COLORS.textSecondary, fontWeight: '600' },
+  secondaryBtn: {
+    flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
+    gap: SPACING.xs, paddingVertical: SPACING.md,
+  },
+  secondaryBtnText: { fontSize: FONT_SIZE.sm, color: COLORS.textSecondary, fontWeight: '600' },
+  secondaryDivider: { width: 1, height: 20, backgroundColor: COLORS.border },
+  // Day picker
+  dayPickerGrid: { gap: SPACING.sm },
+  dayPickerCell: {
+    backgroundColor: COLORS.surface,
+    borderRadius: RADIUS.md,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    paddingHorizontal: SPACING.lg,
+    paddingVertical: SPACING.md,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: SPACING.md,
+  },
+  dayPickerCellActive: { borderColor: COLORS.accent, backgroundColor: COLORS.accentDim },
+  dayPickerCellDisabled: { opacity: 0.35 },
+  dayPickerShort: {
+    fontSize: FONT_SIZE.sm, fontWeight: '900', color: COLORS.textMuted,
+    width: 36,
+  },
+  dayPickerShortActive: { color: COLORS.accent },
+  dayPickerLong: { flex: 1, fontSize: FONT_SIZE.md, fontWeight: '700', color: COLORS.text },
+  dayPickerTextDisabled: { color: COLORS.textMuted },
+  dayPickerSummary: {
+    backgroundColor: COLORS.accentDim,
+    borderRadius: RADIUS.md,
+    borderWidth: 1,
+    borderColor: COLORS.accent + '40',
+    padding: SPACING.lg,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  dayPickerSummaryText: { fontSize: FONT_SIZE.sm, fontWeight: '800', color: COLORS.accent, letterSpacing: 1 },
+  dayPickerSummaryCount: { fontSize: FONT_SIZE.xs, color: COLORS.textMuted },
 });

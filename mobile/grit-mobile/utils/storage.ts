@@ -90,6 +90,7 @@ export interface ProgrammePrefs {
   goal: import('./programmeBuilder').Goal;
   experience: import('./programmeBuilder').Experience;
   daysPerWeek: import('./programmeBuilder').TrainingDays;
+  trainingDays?: number[]; // specific weekday indices selected by user, 0=Sun…6=Sat
   gender: import('./programmeBuilder').Gender;
 }
 
