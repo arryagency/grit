@@ -9,6 +9,8 @@ import {
   TextInput,
   Modal,
   Alert,
+  KeyboardAvoidingView,
+  Platform,
 } from 'react-native';
 import { useState, useCallback } from 'react';
 import { useFocusEffect, router } from 'expo-router';
@@ -451,8 +453,11 @@ export default function ProgressScreen() {
       </ScrollView>
 
       {/* Log weight modal */}
-      <Modal visible={showLogWeight} animationType="slide" presentationStyle="pageSheet" transparent>
-        <View style={styles.modalOverlay}>
+      <Modal visible={showLogWeight} animationType="slide" transparent>
+        <KeyboardAvoidingView
+          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+          style={styles.modalOverlay}
+        >
           <View style={styles.modalSheet}>
             <View style={styles.modalHeader}>
               <Text style={styles.modalTitle}>Log body weight</Text>
@@ -488,7 +493,7 @@ export default function ProgressScreen() {
               <Text style={styles.logBtnText}>Save</Text>
             </TouchableOpacity>
           </View>
-        </View>
+        </KeyboardAvoidingView>
       </Modal>
     </SafeAreaView>
   );
