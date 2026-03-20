@@ -15,6 +15,7 @@ import {
   Easing,
   Linking,
   Share,
+  PanResponder,
 } from 'react-native';
 import { useState, useCallback, useRef, useEffect } from 'react';
 import { useFocusEffect, router } from 'expo-router';
@@ -99,6 +100,19 @@ export default function WorkoutScreen() {
   const sessionTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const sessionFiveNotified = useRef(false);
 
+  // Drag-to-reorder state
+  const [dragFromIdx, setDragFromIdx] = useState<number | null>(null);
+  const [dragToIdx, setDragToIdx] = useState<number | null>(null);
+  const dragFromIdxRef = useRef<number | null>(null);
+  const dragToIdxRef = useRef<number | null>(null);
+  const sessionRef = useRef(session);
+  const dragY = useRef(new Animated.Value(0)).current;
+  const dragPanActive = useRef(false); // true once PanResponder takes over the touch
+
+  // Reorder hint toast
+  const [reorderHintVisible, setReorderHintVisible] = useState(false);
+  const reorderHintTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   // Volume tooltip (shown once, then comparison mode)
   const [hasSeenVolume, setHasSeenVolume] = useState(false);
 
@@ -116,6 +130,10 @@ export default function WorkoutScreen() {
   const restCompleteScale = useRef(new Animated.Value(1)).current;
 
   useEffect(() => {
+    sessionRef.current = session;
+  }, [session]);
+
+  useEffect(() => {
     getSettings().then((s) => {
       setRestTimerDefault(s.restTimerDefault);
       setRestRemaining(s.restTimerDefault);
@@ -126,6 +144,7 @@ export default function WorkoutScreen() {
     return () => {
       if (restIntervalRef.current) clearInterval(restIntervalRef.current);
       if (sessionTimerRef.current) clearInterval(sessionTimerRef.current);
+      if (reorderHintTimer.current) clearTimeout(reorderHintTimer.current);
     };
   }, []);
 
@@ -277,7 +296,7 @@ export default function WorkoutScreen() {
     doStartWorkout();
   }
 
-  function doStartWorkout() {
+  async function doStartWorkout() {
     stopSessionTimer();
     setLastLoggedWeights({});
     setLastLoggedRepsMap({});
@@ -291,6 +310,20 @@ export default function WorkoutScreen() {
       duration: 0,
       notes: '',
     });
+
+    // Show reorder hint for first 3 sessions
+    try {
+      const raw = await AsyncStorage.getItem('@grit/reorderHintCount');
+      const count = raw ? parseInt(raw, 10) : 0;
+      if (count < 3) {
+        await AsyncStorage.setItem('@grit/reorderHintCount', String(count + 1));
+        setReorderHintVisible(true);
+        if (reorderHintTimer.current) clearTimeout(reorderHintTimer.current);
+        reorderHintTimer.current = setTimeout(() => {
+          setReorderHintVisible(false);
+        }, 3000);
+      }
+    } catch (_) {}
   }
 
   // ─── Template Load ───────────────────────────────────────────────────────────
@@ -339,6 +372,65 @@ export default function WorkoutScreen() {
       exercises: prev.exercises.filter((_, i) => i !== exIdx),
     }));
   }
+
+  // ─── Drag-to-reorder ─────────────────────────────────────────────────────────
+
+  const ESTIMATED_CARD_HEIGHT = 220;
+
+  function startDrag(idx: number) {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
+    dragFromIdxRef.current = idx;
+    dragToIdxRef.current = idx;
+    setDragFromIdx(idx);
+    setDragToIdx(idx);
+  }
+
+  function updateDrag(dy: number) {
+    const from = dragFromIdxRef.current;
+    if (from === null) return;
+    const total = sessionRef.current.exercises.length;
+    const delta = Math.round(dy / ESTIMATED_CARD_HEIGHT);
+    const newTo = Math.max(0, Math.min(total - 1, from + delta));
+    if (newTo !== dragToIdxRef.current) {
+      dragToIdxRef.current = newTo;
+      setDragToIdx(newTo);
+    }
+  }
+
+  function endDrag() {
+    const from = dragFromIdxRef.current;
+    const to = dragToIdxRef.current;
+    dragY.setValue(0);
+    dragPanActive.current = false;
+    dragFromIdxRef.current = null;
+    dragToIdxRef.current = null;
+    setDragFromIdx(null);
+    setDragToIdx(null);
+    if (from !== null && to !== null && from !== to) {
+      setSession((prev) => {
+        const exercises = [...prev.exercises];
+        const [removed] = exercises.splice(from, 1);
+        exercises.splice(to, 0, removed);
+        return { ...prev, exercises };
+      });
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    }
+  }
+
+  // PanResponder lives on a wrapper View over the exercise list.
+  const dragPanResponder = useRef(
+    PanResponder.create({
+      onStartShouldSetPanResponder: () => dragFromIdxRef.current !== null,
+      onMoveShouldSetPanResponder: () => dragFromIdxRef.current !== null,
+      onPanResponderGrant: () => { dragPanActive.current = true; },
+      onPanResponderMove: (_, g) => {
+        dragY.setValue(g.dy);
+        updateDrag(g.dy);
+      },
+      onPanResponderRelease: () => endDrag(),
+      onPanResponderTerminate: () => endDrag(),
+    })
+  ).current;
 
   function addSet(exIdx: number) {
     setSession((prev) => {
@@ -735,6 +827,13 @@ export default function WorkoutScreen() {
           </View>
         )}
 
+        {reorderHintVisible && (
+          <View style={styles.reorderHintBanner}>
+            <Ionicons name="reorder-three" size={16} color={COLORS.accent} />
+            <Text style={styles.reorderHintText}>Hold an exercise header to drag and reorder</Text>
+          </View>
+        )}
+
         {/* Volume display — educational tooltip first time, comparison after */}
         {(() => {
           const vol = computeSessionVolume(session);
@@ -773,16 +872,53 @@ export default function WorkoutScreen() {
           );
         })()}
 
-        <ScrollView showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
+        <View {...dragPanResponder.panHandlers} style={{ flex: 1 }}>
+        <ScrollView showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled" scrollEnabled={dragFromIdx === null}>
           {session.exercises.map((ex, exIdx) => {
             const lastEx = getLastSessionForExercise(ex.name, allSessions);
             const suggestion = getSuggestion(ex.name, allSessions);
+            const isDragging = dragFromIdx === exIdx;
+            const isDropTarget = dragToIdx === exIdx && dragFromIdx !== exIdx && dragFromIdx !== null;
+
+            // Cards that need to shift out of the way to show the gap
+            const cardShift = (() => {
+              if (dragFromIdx === null || dragToIdx === null || isDragging) return 0;
+              if (dragFromIdx < dragToIdx && exIdx > dragFromIdx && exIdx <= dragToIdx)
+                return -ESTIMATED_CARD_HEIGHT;
+              if (dragFromIdx > dragToIdx && exIdx < dragFromIdx && exIdx >= dragToIdx)
+                return ESTIMATED_CARD_HEIGHT;
+              return 0;
+            })();
+
             return (
-              <View key={exIdx} style={styles.exerciseCard}>
-                <View style={styles.exHeader}>
+              <Animated.View
+                key={exIdx}
+                style={[
+                  styles.exerciseCard,
+                  isDragging && styles.exerciseCardDragging,
+                  isDropTarget && styles.exerciseCardDropTarget,
+                  isDragging
+                    ? { transform: [{ translateY: dragY }, { scale: 1.03 }], zIndex: 99 }
+                    : cardShift !== 0
+                    ? { transform: [{ translateY: cardShift }] }
+                    : undefined,
+                ]}
+              >
+                <TouchableOpacity
+                  style={styles.exHeader}
+                  activeOpacity={0.85}
+                  delayLongPress={500}
+                  onLongPress={() => startDrag(exIdx)}
+                  onPressOut={() => {
+                    // If the drag was activated but PanResponder hasn't taken over
+                    // (user released without moving), cancel and deselect.
+                    if (dragFromIdxRef.current === exIdx && !dragPanActive.current) {
+                      endDrag();
+                    }
+                  }}
+                >
                   <Text style={styles.exName}>{ex.name}</Text>
                   <View style={styles.exHeaderActions}>
-                    {/* Watch form button */}
                     <TouchableOpacity
                       style={styles.watchFormBtn}
                       onPress={() => watchForm(ex.name)}
@@ -794,7 +930,7 @@ export default function WorkoutScreen() {
                       <Ionicons name="close" size={20} color={COLORS.textMuted} />
                     </TouchableOpacity>
                   </View>
-                </View>
+                </TouchableOpacity>
 
                 {lastEx && (
                   <Text style={styles.prevLabel}>
@@ -861,7 +997,7 @@ export default function WorkoutScreen() {
                   <Ionicons name="add" size={16} color={COLORS.accent} />
                   <Text style={styles.addSetText}>Add set</Text>
                 </TouchableOpacity>
-              </View>
+              </Animated.View>
             );
           })}
 
@@ -875,6 +1011,7 @@ export default function WorkoutScreen() {
 
           <View style={{ height: 100 }} />
         </ScrollView>
+        </View>
 
         {/* Running set log for last-logged exercise */}
         {lastLoggedExercise && (() => {
@@ -923,6 +1060,8 @@ export default function WorkoutScreen() {
             editable={!quickParsing}
             scrollEnabled={true}
             multiline={false}
+            numberOfLines={1}
+            textAlignVertical="center"
           />
           <TouchableOpacity
             style={[styles.quickLogSend, quickParsing && { opacity: 0.5 }]}
@@ -962,12 +1101,13 @@ export default function WorkoutScreen() {
               </TouchableOpacity>
             )}
             keyboardShouldPersistTaps="handled"
+            contentContainerStyle={{ paddingBottom: 320 }}
           />
         </View>
       </Modal>
 
       {/* Session timer picker modal */}
-      <Modal visible={showTimerPicker} animationType="slide" presentationStyle="pageSheet" transparent>
+      <Modal visible={showTimerPicker} animationType="slide" transparent>
         <View style={timerStyles.overlay}>
           <View style={timerStyles.sheet}>
             <View style={timerStyles.header}>
@@ -1118,17 +1258,28 @@ function SetRow({
           <Text style={setStyles.adjText}>+</Text>
         </TouchableOpacity>
       </View>
-      <TouchableOpacity
-        style={[setStyles.doneBtn, set.completed && setStyles.doneBtnActive]}
-        onPress={onToggle}
-        onLongPress={canRemove ? onRemove : undefined}
-      >
-        <Ionicons
-          name={set.completed ? 'checkmark' : 'checkmark-outline'}
-          size={18}
-          color={set.completed ? COLORS.background : COLORS.textMuted}
-        />
-      </TouchableOpacity>
+      {(() => {
+        const hasValues = set.weight > 0 && set.reps > 0;
+        const btnStyle = set.completed
+          ? setStyles.doneBtnActive
+          : hasValues
+          ? setStyles.doneBtnReady
+          : setStyles.doneBtnEmpty;
+        const iconColor = set.completed || hasValues ? COLORS.background : '#555555';
+        return (
+          <TouchableOpacity
+            style={[setStyles.doneBtn, btnStyle]}
+            onPress={onToggle}
+            onLongPress={canRemove ? onRemove : undefined}
+          >
+            <Ionicons
+              name={set.completed ? 'checkmark' : 'checkmark-outline'}
+              size={18}
+              color={iconColor}
+            />
+          </TouchableOpacity>
+        );
+      })()}
     </View>
   );
 }
@@ -1654,6 +1805,33 @@ const styles = StyleSheet.create({
     color: COLORS.textSecondary,
     fontWeight: '600',
   },
+  exerciseCardDragging: {
+    borderColor: COLORS.accent,
+    shadowColor: COLORS.accent,
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.4,
+    shadowRadius: 14,
+    elevation: 16,
+  },
+  exerciseCardDropTarget: {
+    borderTopColor: COLORS.accent,
+    borderTopWidth: 2,
+  },
+  reorderHintBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: SPACING.sm,
+    paddingHorizontal: SPACING.lg,
+    paddingVertical: SPACING.sm,
+    backgroundColor: COLORS.accentDim,
+    borderBottomWidth: 1,
+    borderBottomColor: COLORS.accent + '40',
+  },
+  reorderHintText: {
+    fontSize: FONT_SIZE.sm,
+    fontWeight: '700',
+    color: COLORS.accent,
+  },
   prevLabel: { fontSize: FONT_SIZE.xs, color: COLORS.textMuted, marginBottom: SPACING.xs },
   suggestionRow: {
     flexDirection: 'row',
@@ -1870,8 +2048,10 @@ const setStyles = StyleSheet.create({
   },
   doneBtn: {
     width: 36, height: 36, borderRadius: RADIUS.sm,
-    backgroundColor: COLORS.border, alignItems: 'center', justifyContent: 'center',
+    alignItems: 'center', justifyContent: 'center',
   },
+  doneBtnEmpty: { backgroundColor: '#2a2a2a' },
+  doneBtnReady: { backgroundColor: COLORS.accent },
   doneBtnActive: { backgroundColor: COLORS.accent },
 });
 

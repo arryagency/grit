@@ -7,6 +7,9 @@ import {
   SafeAreaView,
   Animated,
   Alert,
+  Modal,
+  TextInput,
+  FlatList,
 } from 'react-native';
 import { useState, useRef, useEffect } from 'react';
 import { router } from 'expo-router';
@@ -28,6 +31,7 @@ import {
   saveProgram as saveToStorage,
   getSavedProgram,
 } from '@/utils/storage';
+import { ALL_EXERCISES } from '@/constants/exercises';
 
 // ─── Types ──────────────────────────────────────────────────────────
 
@@ -112,7 +116,10 @@ export default function ProgramScreen() {
   const [program, setProgram] = useState<Program | null>(null);
   const [saved, setSaved] = useState(false);
   const [loadingMsg, setLoadingMsg] = useState(0);
-  const [showBeginnerWarning, setShowBeginnerWarning] = useState(false);
+  const [showRecommendationWarning, setShowRecommendationWarning] = useState(false);
+  const [warningChoice, setWarningChoice] = useState<'recommended' | 'keep' | null>(null);
+  const [editingExercise, setEditingExercise] = useState<{ sessionIdx: number; exerciseIdx: number } | null>(null);
+  const [exerciseSearch, setExerciseSearch] = useState('');
   const progressAnim = useRef(new Animated.Value(0)).current;
   const scrollRef = useRef<ScrollView>(null);
 
@@ -219,9 +226,20 @@ export default function ProgramScreen() {
       runGenerate({ ...answers });
       return;
     }
-    // Warn beginners who pick 5+ days before advancing
+    // Warn based on experience level and days selection before advancing
     if (step === 2 && answers.experience === 'beginner' && answers.daysPerWeek && answers.daysPerWeek >= 5) {
-      setShowBeginnerWarning(true);
+      setShowRecommendationWarning(true);
+      setWarningChoice(null);
+      return;
+    }
+    if (step === 2 && answers.experience === 'intermediate' && answers.daysPerWeek && answers.daysPerWeek <= 3) {
+      setShowRecommendationWarning(true);
+      setWarningChoice(null);
+      return;
+    }
+    if (step === 2 && answers.experience === 'advanced' && answers.daysPerWeek && answers.daysPerWeek <= 4) {
+      setShowRecommendationWarning(true);
+      setWarningChoice(null);
       return;
     }
     // When days/week changes, reset day selection and apply smart defaults
@@ -233,7 +251,7 @@ export default function ProgramScreen() {
   }
 
   function goBack() {
-    if (showBeginnerWarning) { setShowBeginnerWarning(false); return; }
+    if (showRecommendationWarning) { setShowRecommendationWarning(false); setWarningChoice(null); return; }
     if (step === 0) { router.back(); return; }
     if (step < 5) { setStep(s => s - 1); return; }
     // On result screen — go directly home
@@ -273,6 +291,20 @@ export default function ProgramScreen() {
     ]);
   }
 
+  async function handleReplaceExercise(newExerciseName: string) {
+    if (!editingExercise || !program) return;
+    const { sessionIdx, exerciseIdx } = editingExercise;
+    const updatedProgram = JSON.parse(JSON.stringify(program));
+    updatedProgram.sessions[sessionIdx].exercises[exerciseIdx].name = newExerciseName;
+    updatedProgram.sessions[sessionIdx].exercises[exerciseIdx].muscleGroup = 'FULL BODY';
+    setProgram(updatedProgram);
+    if (saved) {
+      await saveToStorage(updatedProgram);
+    }
+    setEditingExercise(null);
+    setExerciseSearch('');
+  }
+
   const progressWidth = progressAnim.interpolate({ inputRange: [0, 1], outputRange: ['0%', '100%'] });
 
   // ── Loading skeleton ───────────────────────────────────────────────
@@ -303,71 +335,103 @@ export default function ProgramScreen() {
         </View>
       )}
 
-      {/* ── Beginner Warning Interstitial ── */}
-      {showBeginnerWarning && (
-        <ScrollView contentContainerStyle={styles.stepContent}>
-          <Text style={styles.stepTitle}>Hold on.</Text>
-          <View style={styles.rationaleCard}>
-            <Text style={styles.rationaleText}>
-              {`You're a beginner training ${answers.daysPerWeek} days — we recommend starting with 3–4 days to build the habit and recover properly. Most beginners who start with ${answers.daysPerWeek} days burn out within 3 weeks. But it's your call.`}
-            </Text>
-          </View>
-          <View style={styles.optionList}>
-            <TouchableOpacity
-              style={[styles.optionCard, styles.optionCardActive]}
-              onPress={() => {
-                setAnswers(a => ({ ...a, daysPerWeek: 3, trainingDays: smartDayDefaults(3) }));
-                setShowBeginnerWarning(false);
-                setStep(3);
-              }}
-              activeOpacity={0.7}
-            >
-              <View style={styles.optionTop}>
-                <Text style={[styles.optionLabel, styles.optionLabelActive]}>
-                  Take the recommendation — 3 days
+      {/* ── Recommendation Warning Interstitial ── */}
+      {showRecommendationWarning && (() => {
+        const exp = answers.experience;
+        const days = answers.daysPerWeek;
+        const recommendedDays: number =
+          exp === 'beginner' ? 3 :
+          exp === 'intermediate' ? 4 :
+          5;
+        const rationaleText =
+          exp === 'beginner'
+            ? `You're a beginner training ${days} days — we recommend starting with 3–4 days to build the habit and recover properly. Most beginners who start with ${days} days burn out within 3 weeks. But it's your call.`
+            : exp === 'intermediate'
+            ? `You're intermediate — ${days} days works, but 4-day Upper/Lower is significantly more effective for your level. It allows focused sessions without the fatigue of 5+ days.`
+            : `Advanced lifters typically need 5-6 days to generate enough volume for continued adaptation. ${days} days can work but limits your ceiling.`;
+        return (
+          <ScrollView contentContainerStyle={styles.stepContent}>
+            <Text style={styles.stepTitle}>Hold on.</Text>
+            <View style={styles.rationaleCard}>
+              <Text style={styles.rationaleText}>{rationaleText}</Text>
+            </View>
+            <View style={styles.optionList}>
+              <TouchableOpacity
+                style={[styles.optionCard, warningChoice === 'recommended' && styles.optionCardActive]}
+                onPress={() => setWarningChoice('recommended')}
+                activeOpacity={0.7}
+              >
+                <View style={styles.optionTop}>
+                  <Text style={[styles.optionLabel, warningChoice === 'recommended' && styles.optionLabelActive]}>
+                    {`Recommended: ${recommendedDays} days`}
+                  </Text>
+                  {warningChoice === 'recommended' && (
+                    <Ionicons name="checkmark-circle" size={20} color={COLORS.accent} />
+                  )}
+                </View>
+                <Text style={styles.optionDesc}>
+                  {exp === 'beginner'
+                    ? 'Full Body A/B alternating. Linear progression adds weight every session. The most effective structure at your level.'
+                    : exp === 'intermediate'
+                    ? 'Upper/Lower split. Double progression keeps gains coming with focused, balanced sessions.'
+                    : 'PPL or similar high-frequency split. Enough volume to keep driving adaptation at the advanced level.'}
                 </Text>
-                <Ionicons name="checkmark-circle" size={20} color={COLORS.accent} />
-              </View>
-              <Text style={styles.optionDesc}>
-                Full Body A/B alternating. Linear progression adds weight every session. The most effective structure at your level.
-              </Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={styles.optionCard}
-              onPress={() => {
-                setAnswers(a => ({
-                  ...a,
-                  trainingDays: a.daysPerWeek ? smartDayDefaults(a.daysPerWeek) : null,
-                }));
-                setShowBeginnerWarning(false);
-                setStep(3);
-              }}
-              activeOpacity={0.7}
-            >
-              <View style={styles.optionTop}>
-                <Text style={styles.optionLabel}>Keep my {answers.daysPerWeek} days</Text>
-              </View>
-              <Text style={styles.optionDesc}>
-                {`We'll build you a beginner-appropriate ${answers.daysPerWeek}-day program.`}
-              </Text>
-            </TouchableOpacity>
-          </View>
-          <TouchableOpacity
-            style={styles.warningGoBack}
-            onPress={() => {
-              setShowBeginnerWarning(false);
-              // stay on step 2 so user can change days
-            }}
-            activeOpacity={0.7}
-          >
-            <Ionicons name="arrow-back" size={15} color={COLORS.textMuted} />
-            <Text style={styles.warningGoBackText}>Go back — change my days</Text>
-          </TouchableOpacity>
-        </ScrollView>
-      )}
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.optionCard, warningChoice === 'keep' && styles.optionCardActive]}
+                onPress={() => setWarningChoice('keep')}
+                activeOpacity={0.7}
+              >
+                <View style={styles.optionTop}>
+                  <Text style={[styles.optionLabel, warningChoice === 'keep' && styles.optionLabelActive]}>
+                    {`Keep my ${days} days`}
+                  </Text>
+                  {warningChoice === 'keep' && (
+                    <Ionicons name="checkmark-circle" size={20} color={COLORS.accent} />
+                  )}
+                </View>
+                <Text style={styles.optionDesc}>
+                  {`We'll build you an ${exp}-appropriate ${days}-day program.`}
+                </Text>
+              </TouchableOpacity>
+            </View>
+            <View style={styles.warningFooter}>
+              <TouchableOpacity
+                style={[styles.nextBtn, warningChoice === null && styles.nextBtnDisabled]}
+                onPress={() => {
+                  if (!warningChoice) return;
+                  if (warningChoice === 'recommended') {
+                    setAnswers(a => ({ ...a, daysPerWeek: recommendedDays as TrainingDays, trainingDays: smartDayDefaults(recommendedDays) }));
+                  } else {
+                    setAnswers(a => ({ ...a, trainingDays: a.daysPerWeek ? smartDayDefaults(a.daysPerWeek) : null }));
+                  }
+                  setShowRecommendationWarning(false);
+                  setWarningChoice(null);
+                  setStep(3);
+                }}
+                disabled={warningChoice === null}
+                activeOpacity={0.7}
+              >
+                <Text style={styles.nextBtnText}>Continue</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.warningGoBack}
+                onPress={() => {
+                  setShowRecommendationWarning(false);
+                  setWarningChoice(null);
+                }}
+                activeOpacity={0.7}
+              >
+                <Ionicons name="arrow-back" size={15} color={COLORS.textMuted} />
+                <Text style={styles.warningGoBackText}>Go back — change my days</Text>
+              </TouchableOpacity>
+            </View>
+          </ScrollView>
+        );
+      })()}
 
       {/* ── Step 0: Goal ── */}
-      {!showBeginnerWarning && step === 0 && (
+      {!showRecommendationWarning && step === 0 && (
         <ScrollView contentContainerStyle={styles.stepContent}>
           <Text style={styles.stepTitle}>What's your goal?</Text>
           <Text style={styles.stepSubtitle}>Your entire program is built around this.</Text>
@@ -386,7 +450,7 @@ export default function ProgramScreen() {
       )}
 
       {/* ── Step 1: Experience ── */}
-      {!showBeginnerWarning && step === 1 && (
+      {!showRecommendationWarning && step === 1 && (
         <ScrollView contentContainerStyle={styles.stepContent}>
           <Text style={styles.stepTitle}>Training experience?</Text>
           <Text style={styles.stepSubtitle}>Sets your volume, rep ranges, and progression model.</Text>
@@ -417,7 +481,7 @@ export default function ProgramScreen() {
       )}
 
       {/* ── Step 2: Days per week ── */}
-      {!showBeginnerWarning && step === 2 && (
+      {!showRecommendationWarning && step === 2 && (
         <ScrollView contentContainerStyle={styles.stepContent}>
           <Text style={styles.stepTitle}>Days per week?</Text>
           <Text style={styles.stepSubtitle}>Determines your split. Be realistic — consistency beats ambition.</Text>
@@ -468,7 +532,7 @@ export default function ProgramScreen() {
       )}
 
       {/* ── Step 3: Which days ── */}
-      {!showBeginnerWarning && step === 3 && (
+      {!showRecommendationWarning && step === 3 && (
         <ScrollView contentContainerStyle={styles.stepContent}>
           <Text style={styles.stepTitle}>Which days?</Text>
           <Text style={styles.stepSubtitle}>
@@ -523,7 +587,7 @@ export default function ProgramScreen() {
       )}
 
       {/* ── Step 4: Gender ── */}
-      {!showBeginnerWarning && step === 4 && (
+      {!showRecommendationWarning && step === 4 && (
         <ScrollView contentContainerStyle={styles.stepContent}>
           <Text style={styles.stepTitle}>Gender</Text>
           <Text style={styles.stepSubtitle}>
@@ -544,7 +608,7 @@ export default function ProgramScreen() {
       )}
 
       {/* ── Step 5: Generating / Result ── */}
-      {!showBeginnerWarning && step === 5 && (
+      {!showRecommendationWarning && step === 5 && (
         <ScrollView
           ref={scrollRef}
           contentContainerStyle={styles.resultContent}
@@ -572,13 +636,57 @@ export default function ProgramScreen() {
               onSave={handleSave}
               onRestart={restart}
               onEditDays={editDays}
+              onEditExercise={(si, ei) => setEditingExercise({ sessionIdx: si, exerciseIdx: ei })}
             />
           )}
         </ScrollView>
       )}
 
+      {/* Edit exercise modal */}
+      <Modal
+        visible={editingExercise !== null}
+        animationType="slide"
+        presentationStyle="pageSheet"
+        onRequestClose={() => { setEditingExercise(null); setExerciseSearch(''); }}
+      >
+        <View style={styles.editModalContainer}>
+          <View style={styles.editModalHeader}>
+            <Text style={styles.editModalTitle}>Swap exercise</Text>
+            <TouchableOpacity onPress={() => { setEditingExercise(null); setExerciseSearch(''); }} hitSlop={12}>
+              <Ionicons name="close" size={24} color={COLORS.text} />
+            </TouchableOpacity>
+          </View>
+          <TextInput
+            style={styles.editModalSearch}
+            value={exerciseSearch}
+            onChangeText={setExerciseSearch}
+            placeholder="Search exercises..."
+            placeholderTextColor={COLORS.textMuted}
+            autoFocus
+          />
+          <FlatList
+            data={ALL_EXERCISES.filter(e =>
+              exerciseSearch.length === 0 ||
+              e.toLowerCase().includes(exerciseSearch.toLowerCase())
+            )}
+            keyExtractor={(item) => item}
+            renderItem={({ item }) => (
+              <TouchableOpacity
+                style={styles.editModalItem}
+                onPress={() => handleReplaceExercise(item)}
+              >
+                <Text style={styles.editModalItemText}>{item}</Text>
+                <Ionicons name="swap-horizontal" size={16} color={COLORS.textMuted} />
+              </TouchableOpacity>
+            )}
+            keyboardShouldPersistTaps="handled"
+            contentContainerStyle={{ paddingBottom: 320 }}
+          />
+        </View>
+      </Modal>
+
       {/* Footer button */}
-      {!showBeginnerWarning && step >= 0 && step < 5 && (
+      {!showRecommendationWarning && step >= 0 && step < 5 && (
         <View style={styles.footer}>
           <TouchableOpacity
             style={[styles.nextBtn, !canProceed() && styles.nextBtnDisabled]}
@@ -617,13 +725,14 @@ function OptionCard({
 }
 
 function ProgramResult({
-  program, saved, onSave, onRestart, onEditDays,
+  program, saved, onSave, onRestart, onEditDays, onEditExercise,
 }: {
   program: Program;
   saved: boolean;
   onSave: () => void;
   onRestart: () => void;
   onEditDays: () => void;
+  onEditExercise: (sessionIdx: number, exerciseIdx: number) => void;
 }) {
   const goalLabel: Record<string, string> = {
     muscle: 'Muscle', strength: 'Strength', 'fat-loss': 'Fat Loss', fitness: 'Fitness',
@@ -671,7 +780,7 @@ function ProgramResult({
 
       {/* Sessions */}
       {program.sessions.map((session, si) => (
-        <SessionCard key={si} session={session} index={si} />
+        <SessionCard key={si} session={session} index={si} onEditExercise={(ei) => onEditExercise(si, ei)} />
       ))}
 
       {/* Progression + Deload */}
@@ -712,7 +821,15 @@ function ProgramResult({
   );
 }
 
-function SessionCard({ session, index }: { session: import('@/utils/programBuilder').ProgramSession; index: number }) {
+function SessionCard({
+  session,
+  index,
+  onEditExercise,
+}: {
+  session: import('@/utils/programBuilder').ProgramSession;
+  index: number;
+  onEditExercise: (exerciseIdx: number) => void;
+}) {
   return (
     <View style={styles.sessionCard}>
       {/* Card header */}
@@ -746,6 +863,13 @@ function SessionCard({ session, index }: { session: import('@/utils/programBuild
               <View style={[styles.muscleTag, { borderColor: color + '60' }]}>
                 <Text style={[styles.muscleTagText, { color }]}>{ex.muscleGroup}</Text>
               </View>
+              <TouchableOpacity
+                onPress={() => onEditExercise(ei)}
+                hitSlop={8}
+                style={styles.exerciseEditBtn}
+              >
+                <Ionicons name="pencil-outline" size={14} color={COLORS.textMuted} />
+              </TouchableOpacity>
             </View>
           );
         })}
@@ -942,11 +1066,15 @@ const styles = StyleSheet.create({
     marginBottom: SPACING.lg,
   },
   rationaleText: { fontSize: FONT_SIZE.sm, color: COLORS.textSecondary, lineHeight: 20 },
+  warningFooter: {
+    gap: SPACING.sm,
+    marginTop: SPACING.sm,
+  },
   warningGoBack: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
-    marginTop: SPACING.lg,
+    marginTop: SPACING.sm,
     alignSelf: 'center',
     paddingVertical: SPACING.sm,
     paddingHorizontal: SPACING.md,
@@ -1088,4 +1216,49 @@ const styles = StyleSheet.create({
   },
   dayPickerSummaryText: { fontSize: FONT_SIZE.sm, fontWeight: '800', color: COLORS.accent, letterSpacing: 1 },
   dayPickerSummaryCount: { fontSize: FONT_SIZE.xs, color: COLORS.textMuted },
+
+  // Exercise edit button
+  exerciseEditBtn: {
+    padding: SPACING.xs,
+    marginLeft: SPACING.xs,
+  },
+
+  // Edit exercise modal
+  editModalContainer: {
+    flex: 1,
+    backgroundColor: COLORS.background,
+  },
+  editModalHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: SPACING.xl,
+    paddingTop: SPACING.xl,
+    paddingBottom: SPACING.md,
+    borderBottomWidth: 1,
+    borderBottomColor: COLORS.border,
+  },
+  editModalTitle: { fontSize: FONT_SIZE.xl, fontWeight: '900', color: COLORS.text },
+  editModalSearch: {
+    margin: SPACING.xl,
+    marginBottom: SPACING.md,
+    backgroundColor: COLORS.surface,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    borderRadius: RADIUS.md,
+    paddingHorizontal: SPACING.lg,
+    paddingVertical: SPACING.md,
+    color: COLORS.text,
+    fontSize: FONT_SIZE.md,
+  },
+  editModalItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: SPACING.xl,
+    paddingVertical: SPACING.md,
+    borderBottomWidth: 1,
+    borderBottomColor: COLORS.border,
+  },
+  editModalItemText: { fontSize: FONT_SIZE.md, color: COLORS.text, flex: 1 },
 });

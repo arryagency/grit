@@ -6,6 +6,8 @@ export interface UserProfile {
   name: string;
   trainingAge: 'beginner' | 'intermediate' | 'advanced';
   goal: string;
+  goals?: string[]; // all selected goals in selection order
+  weightUnit?: 'kg' | 'lbs';
   daysPerWeek?: number;
   trainingDays?: number[]; // 0=Sun, 1=Mon, 2=Tue, 3=Wed, 4=Thu, 5=Fri, 6=Sat
   gymTime?: string; // "HH:MM" 24-hour, e.g. "18:00"

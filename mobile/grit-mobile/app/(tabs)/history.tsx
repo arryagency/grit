@@ -13,6 +13,50 @@ import { Ionicons } from '@expo/vector-icons';
 import { getSessions, WorkoutSession, formatDate } from '@/utils/storage';
 import { COLORS, SPACING, FONT_SIZE, RADIUS } from '@/constants/theme';
 
+const WEEK_DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+
+function WeekStrip({ sessions }: { sessions: WorkoutSession[] }) {
+  const today = new Date();
+  // Build Mon–Sun of the current week
+  const dayOfWeek = today.getDay(); // 0=Sun
+  const mondayOffset = dayOfWeek === 0 ? -6 : 1 - dayOfWeek;
+  const monday = new Date(today);
+  monday.setDate(today.getDate() + mondayOffset);
+
+  const days = Array.from({ length: 7 }, (_, i) => {
+    const d = new Date(monday);
+    d.setDate(monday.getDate() + i);
+    return d;
+  });
+
+  const trainedDates = new Set(
+    sessions.map((s) => new Date(s.date).toDateString())
+  );
+
+  const todayStr = today.toDateString();
+
+  return (
+    <View style={styles.weekStrip}>
+      {days.map((d, i) => {
+        const trained = trainedDates.has(d.toDateString());
+        const isToday = d.toDateString() === todayStr;
+        return (
+          <View key={i} style={styles.weekDay}>
+            <Text style={[styles.weekDayLabel, isToday && styles.weekDayLabelToday]}>
+              {WEEK_DAYS[i]}
+            </Text>
+            <View style={[
+              styles.weekDayDot,
+              trained && styles.weekDayDotTrained,
+              isToday && !trained && styles.weekDayDotToday,
+            ]} />
+          </View>
+        );
+      })}
+    </View>
+  );
+}
+
 export default function HistoryScreen() {
   const [sessions, setSessions] = useState<WorkoutSession[]>([]);
 
@@ -30,8 +74,8 @@ export default function HistoryScreen() {
         <View style={styles.header}>
           <Text style={styles.screenTitle}>History</Text>
         </View>
+        <WeekStrip sessions={sessions} />
         <View style={styles.emptyState}>
-          <Ionicons name="calendar-outline" size={48} color={COLORS.textMuted} />
           <Text style={styles.emptyText}>No sessions yet.</Text>
           <Text style={styles.emptySubText}>
             Log your first workout and it'll appear here.
@@ -47,6 +91,7 @@ export default function HistoryScreen() {
         <Text style={styles.screenTitle}>History</Text>
         <Text style={styles.sessionCount}>{sessions.length} sessions</Text>
       </View>
+      <WeekStrip sessions={sessions} />
       <FlatList
         data={sessions}
         keyExtractor={(item) => item.id}
@@ -206,15 +251,49 @@ const styles = StyleSheet.create({
     color: COLORS.textSecondary,
     fontWeight: '500',
   },
+  weekStrip: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginHorizontal: SPACING.xl,
+    marginBottom: SPACING.xl,
+    backgroundColor: COLORS.surface,
+    borderRadius: RADIUS.md,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    paddingVertical: SPACING.md,
+    paddingHorizontal: SPACING.sm,
+  },
+  weekDay: { flex: 1, alignItems: 'center', gap: SPACING.xs },
+  weekDayLabel: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: COLORS.textMuted,
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+  },
+  weekDayLabelToday: { color: COLORS.accent },
+  weekDayDot: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    backgroundColor: COLORS.border,
+  },
+  weekDayDotTrained: {
+    backgroundColor: COLORS.accent,
+  },
+  weekDayDotToday: {
+    borderWidth: 2,
+    borderColor: COLORS.accent,
+    backgroundColor: 'transparent',
+  },
   emptyState: {
-    flex: 1,
+    marginHorizontal: SPACING.xl,
     alignItems: 'center',
-    justifyContent: 'center',
-    gap: SPACING.md,
-    paddingHorizontal: SPACING.xxl,
+    gap: SPACING.sm,
+    paddingVertical: SPACING.lg,
   },
   emptyText: {
-    fontSize: FONT_SIZE.xl,
+    fontSize: FONT_SIZE.lg,
     fontWeight: '800',
     color: COLORS.textSecondary,
   },

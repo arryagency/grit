@@ -185,35 +185,30 @@ export default function HomeScreen() {
             onPress={() => router.push('/(tabs)/progress')}
             activeOpacity={0.7}
           >
+            <View style={styles.bwWidgetIcon}>
+              <Ionicons name="scale-outline" size={20} color={COLORS.accent} />
+            </View>
             {currentWeight ? (
               <>
                 <View style={styles.bwWidgetLeft}>
-                  <Text style={styles.bwWeightValue}>{currentWeight}kg</Text>
-                  <Text style={styles.bwWeightLabel}>Current</Text>
-                </View>
-                <View style={styles.bwWidgetRight}>
+                  <View style={styles.bwValueRow}>
+                    <Text style={styles.bwWeightValue}>{currentWeight}</Text>
+                    <Text style={styles.bwWeightUnit}>kg</Text>
+                    <View style={styles.bwLoggedDot} />
+                  </View>
                   {weightChange !== null && Math.abs(weightChange) >= 0.1 && (
-                    <Text style={[
-                      styles.bwChange,
-                      { color: weightChange > 0 ? COLORS.success : COLORS.warning },
-                    ]}>
+                    <Text style={[styles.bwChange, { color: weightChange > 0 ? COLORS.success : COLORS.warning }]}>
                       {weightChange > 0 ? '+' : ''}{weightChange.toFixed(1)}kg since start
                     </Text>
                   )}
+                </View>
+                <View style={styles.bwWidgetRight}>
                   {bwTrend && (
                     <View style={styles.bwTrendBadge}>
                       <Ionicons
-                        name={
-                          bwTrend === 'gaining' ? 'trending-up' :
-                          bwTrend === 'losing' ? 'trending-down' :
-                          'remove'
-                        }
+                        name={bwTrend === 'gaining' ? 'trending-up' : bwTrend === 'losing' ? 'trending-down' : 'remove'}
                         size={12}
-                        color={
-                          bwTrend === 'gaining' ? COLORS.success :
-                          bwTrend === 'losing' ? COLORS.warning :
-                          COLORS.textSecondary
-                        }
+                        color={bwTrend === 'gaining' ? COLORS.success : bwTrend === 'losing' ? COLORS.warning : COLORS.textSecondary}
                       />
                       <Text style={styles.bwTrendText}>
                         {bwTrend === 'gaining' ? 'Gaining' : bwTrend === 'losing' ? 'Losing' : 'Maintaining'}
@@ -225,8 +220,8 @@ export default function HomeScreen() {
               </>
             ) : (
               <View style={styles.bwWidgetEmpty}>
-                <Ionicons name="scale-outline" size={18} color={COLORS.textMuted} />
-                <Text style={styles.bwEmptyText}>Tap to log your weight</Text>
+                <Text style={styles.bwEmptyText}>Tap to log today's weight</Text>
+                <Ionicons name="add-circle-outline" size={18} color={COLORS.accent} />
               </View>
             )}
           </TouchableOpacity>
@@ -345,9 +340,13 @@ export default function HomeScreen() {
 
         {/* Empty state */}
         {sessions.length === 0 && (
-          <View style={styles.emptyState}>
-            <Text style={styles.emptyText}>No sessions logged yet.</Text>
-            <Text style={styles.emptySubText}>Hit the Workout tab to log your first session.</Text>
+          <View style={styles.section}>
+            <View style={styles.emptyState}>
+              <Text style={styles.emptyText}>Your history starts today.</Text>
+              <Text style={styles.emptySubText}>
+                Every elite lifter started at session 1. Tap Workout to log yours.
+              </Text>
+            </View>
           </View>
         )}
 
@@ -396,19 +395,19 @@ const styles = StyleSheet.create({
   headerRight: { alignItems: 'flex-end', gap: SPACING.sm },
   streakBadge: {
     alignItems: 'center',
-    backgroundColor: COLORS.accentDim,
+    backgroundColor: COLORS.surface,
     borderRadius: RADIUS.md,
     paddingHorizontal: SPACING.lg,
     paddingVertical: SPACING.sm,
-    borderWidth: 1,
+    borderWidth: 2,
     borderColor: COLORS.accent,
   },
   streakNumber: { fontSize: FONT_SIZE.xxl, fontWeight: '900', color: COLORS.accent },
   streakLabel: {
     fontSize: FONT_SIZE.xs,
-    fontWeight: '700',
+    fontWeight: '900',
     color: COLORS.accent,
-    letterSpacing: 1,
+    letterSpacing: 1.5,
     textTransform: 'uppercase',
   },
   motivationCard: {
@@ -509,23 +508,40 @@ const styles = StyleSheet.create({
   bwWidget: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
-    backgroundColor: COLORS.surface,
+    backgroundColor: '#141414',
     borderRadius: RADIUS.md,
     borderWidth: 1,
-    borderColor: COLORS.border,
+    borderColor: '#2a2a2a',
     padding: SPACING.lg,
+    gap: SPACING.md,
   },
-  bwWidgetLeft: { gap: 2 },
-  bwWeightValue: { fontSize: FONT_SIZE.xxl, fontWeight: '900', color: COLORS.success },
-  bwWeightLabel: { fontSize: FONT_SIZE.xs, color: COLORS.textMuted },
+  bwWidgetIcon: {
+    width: 36,
+    height: 36,
+    borderRadius: RADIUS.sm,
+    backgroundColor: COLORS.accentDim,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  bwWidgetLeft: { flex: 1, gap: 3 },
+  bwValueRow: { flexDirection: 'row', alignItems: 'baseline', gap: 4 },
+  bwWeightValue: { fontSize: FONT_SIZE.xxl, fontWeight: '900', color: COLORS.text },
+  bwWeightUnit: { fontSize: FONT_SIZE.md, color: COLORS.textMuted, fontWeight: '600' },
+  bwLoggedDot: {
+    width: 7,
+    height: 7,
+    borderRadius: 4,
+    backgroundColor: COLORS.success,
+    marginLeft: 4,
+    marginBottom: 2,
+  },
+  bwChange: { fontSize: FONT_SIZE.xs, fontWeight: '700' },
   bwWidgetRight: { alignItems: 'flex-end', gap: SPACING.xs },
-  bwChange: { fontSize: FONT_SIZE.sm, fontWeight: '700' },
   bwTrendBadge: { flexDirection: 'row', alignItems: 'center', gap: 3 },
   bwTrendText: { fontSize: FONT_SIZE.xs, color: COLORS.textSecondary, fontWeight: '600' },
   bwSeeMore: { fontSize: FONT_SIZE.xs, color: COLORS.accent, fontWeight: '600' },
-  bwWidgetEmpty: { flexDirection: 'row', alignItems: 'center', gap: SPACING.sm },
-  bwEmptyText: { fontSize: FONT_SIZE.sm, color: COLORS.textMuted },
+  bwWidgetEmpty: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  bwEmptyText: { fontSize: FONT_SIZE.sm, color: COLORS.textSecondary },
   // Saved program card
   savedProgramCard: {
     backgroundColor: COLORS.surface,
@@ -633,11 +649,15 @@ const styles = StyleSheet.create({
   },
   viewDetails: { fontSize: FONT_SIZE.sm, color: COLORS.accent, fontWeight: '600' },
   emptyState: {
-    marginHorizontal: SPACING.xl,
-    alignItems: 'center',
-    paddingVertical: SPACING.xxl,
+    backgroundColor: COLORS.surface,
+    borderRadius: RADIUS.md,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    borderLeftWidth: 3,
+    borderLeftColor: COLORS.accent,
+    padding: SPACING.lg,
     gap: SPACING.sm,
   },
-  emptyText: { fontSize: FONT_SIZE.lg, fontWeight: '700', color: COLORS.textSecondary },
-  emptySubText: { fontSize: FONT_SIZE.sm, color: COLORS.textMuted, textAlign: 'center' },
+  emptyText: { fontSize: FONT_SIZE.md, fontWeight: '800', color: COLORS.text },
+  emptySubText: { fontSize: FONT_SIZE.sm, color: COLORS.textSecondary, lineHeight: 20 },
 });

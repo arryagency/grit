@@ -59,6 +59,9 @@ export interface Program {
 
 const MUSCLE: Record<string, string> = {
   'Barbell Back Squat': 'QUADS',
+  'Sumo Squat': 'QUADS',
+  'Dumbbell Chest Press': 'CHEST',
+  'Cable Kickback': 'GLUTES',
   'Bench Press': 'CHEST',
   'Barbell Row': 'BACK',
   'Overhead Press': 'SHOULDERS',
@@ -152,7 +155,7 @@ function calcReps(ex: Ex, goal: Goal, female: boolean): string {
     } else if (goal === 'fitness') {
       reps = shiftReps(reps, 2);
     }
-    if (female) reps = shiftReps(reps, 3);
+    if (female) reps = shiftReps(reps, 2);
   }
   return reps;
 }
@@ -438,6 +441,89 @@ const BW_LB: Session = { label: 'Lower B', exercises: [
   { name: 'Glute Bridge',       sets: 3, reps: '20-25', compound: false },
 ]};
 
+// ─── Female Sessions ──────────────────────────────────────────────────
+
+const F_BEG_FB_A: Session = { label: 'Full Body A', exercises: [
+  { name: 'Romanian Deadlift',      sets: 3, reps: '8-12',  compound: true,  mainLift: true },
+  { name: 'Dumbbell Chest Press',   sets: 3, reps: '10-15', compound: true  },
+  { name: 'Cable Row',              sets: 3, reps: '10-12', compound: true  },
+  { name: 'Bulgarian Split Squat',  sets: 3, reps: '10-12 each', compound: true },
+  { name: 'Hip Thrust',             sets: 3, reps: '12-15', compound: true  },
+  { name: 'Plank',                  sets: 3, reps: '30-45 sec', compound: false },
+]};
+
+const F_BEG_FB_B: Session = { label: 'Full Body B', exercises: [
+  { name: 'Barbell Back Squat',     sets: 3, reps: '10-15', compound: true,  mainLift: true },
+  { name: 'Lat Pulldown',           sets: 3, reps: '10-12', compound: true  },
+  { name: 'Dumbbell Shoulder Press',sets: 3, reps: '10-15', compound: true  },
+  { name: 'Leg Curl',               sets: 3, reps: '10-12', compound: false },
+  { name: 'Glute Bridge',           sets: 3, reps: '15-20', compound: false },
+  { name: 'Lateral Raise',          sets: 3, reps: '15-20', compound: false },
+]};
+
+const F_INT_LA: Session = { label: 'Lower A', exercises: [
+  { name: 'Barbell Back Squat',     sets: 4, reps: '8-12',  compound: true,  mainLift: true },
+  { name: 'Romanian Deadlift',      sets: 4, reps: '8-10',  compound: true  },
+  { name: 'Bulgarian Split Squat',  sets: 3, reps: '10-12 each', compound: true },
+  { name: 'Hip Thrust',             sets: 4, reps: '12-15', compound: true  },
+  { name: 'Leg Curl',               sets: 3, reps: '10-12', compound: false },
+  { name: 'Calf Raise',             sets: 4, reps: '15-20', compound: false },
+]};
+
+const F_INT_LB: Session = { label: 'Lower B', exercises: [
+  { name: 'Sumo Squat',             sets: 4, reps: '10-12', compound: true,  mainLift: true },
+  { name: 'Glute Bridge',           sets: 4, reps: '15-20', compound: false },
+  { name: 'Leg Press',              sets: 3, reps: '10-15', compound: true  },
+  { name: 'Leg Extension',          sets: 3, reps: '15-20', compound: false },
+  { name: 'Cable Kickback',         sets: 3, reps: '15 each', compound: false },
+]};
+
+const F_INT_UA: Session = { label: 'Upper A', exercises: [
+  { name: 'Dumbbell Chest Press',   sets: 4, reps: '10-15', compound: true,  mainLift: true },
+  { name: 'Cable Row',              sets: 4, reps: '10-12', compound: true  },
+  { name: 'Dumbbell Shoulder Press',sets: 3, reps: '12-15', compound: true  },
+  { name: 'Lat Pulldown',           sets: 3, reps: '10-12', compound: true  },
+  { name: 'Lateral Raise',          sets: 3, reps: '15-20', compound: false },
+]};
+
+const F_INT_UB: Session = { label: 'Upper B', exercises: [
+  { name: 'Incline Dumbbell Press', sets: 4, reps: '10-15', compound: true  },
+  { name: 'Pull-Up',                sets: 4, reps: '8-12',  compound: true  },
+  { name: 'Face Pull',              sets: 3, reps: '15-20', compound: false },
+  { name: 'Dumbbell Curl',          sets: 3, reps: '12-15', compound: false },
+  { name: 'Overhead Tricep Extension', sets: 3, reps: '12-15', compound: false },
+]};
+
+function selectFemaleTemplate(days: TrainingDays, exp: Experience): TemplateResult {
+  if (days <= 3) {
+    return {
+      sessions: [F_BEG_FB_A, F_BEG_FB_B],
+      split: 'Full Body',
+      trainingDayIndices: days === 2 ? [1, 4] : [1, 3, 5],
+    };
+  }
+  if (days === 4) {
+    return {
+      sessions: [F_INT_UA, F_INT_LA, F_INT_UB, F_INT_LB],
+      split: 'Upper / Lower',
+      trainingDayIndices: [1, 2, 4, 5],
+    };
+  }
+  if (days === 5) {
+    return {
+      sessions: [F_INT_UA, F_INT_LA, F_BEG_FB_A, F_INT_UB, F_INT_LB],
+      split: 'Upper/Lower + Full Body',
+      trainingDayIndices: [1, 2, 3, 4, 5],
+    };
+  }
+  // 6 days
+  return {
+    sessions: [F_INT_UA, F_INT_LA, F_BEG_FB_A, F_INT_UB, F_INT_LB, F_BEG_FB_B],
+    split: 'Upper/Lower ×3',
+    trainingDayIndices: [1, 2, 3, 4, 5, 6],
+  };
+}
+
 function selectBodyweightTemplate(days: TrainingDays): TemplateResult {
   if (days <= 3) {
     return {
@@ -646,11 +732,9 @@ function convertSession(
 ): ProgramSession {
   const female = gender === 'female';
   const advanced = exp === 'advanced';
-  const isLegDay = /leg|lower/i.test(session.label);
 
   const exercises: ProgramExercise[] = session.exercises.map((ex) => {
     let sets = ex.sets;
-    if (female) sets += 1;
     if (advanced && sets < 6) sets += 1;
     return {
       name: ex.name,
@@ -660,17 +744,6 @@ function convertSession(
       muscleGroup: getMuscleGroup(ex.name),
     };
   });
-
-  // Female: add Hip Thrust to leg/lower sessions without it
-  if (female && isLegDay && !session.exercises.some(e => e.name === 'Hip Thrust')) {
-    exercises.push({
-      name: 'Hip Thrust',
-      sets: advanced ? 5 : 4,
-      reps: goal === 'strength' ? '6-9' : '12-18',
-      rest: goal === 'strength' ? '2-3 min' : '60 sec',
-      muscleGroup: 'GLUTES',
-    });
-  }
 
   return {
     label: session.label,
@@ -686,6 +759,8 @@ export function buildProgram(input: ProgramInput): Program {
   const isBodyweight = input.equipment === 'Bodyweight only';
   const { sessions: rawSessions, split, trainingDayIndices: defaultIndices } = isBodyweight
     ? selectBodyweightTemplate(daysPerWeek)
+    : gender === 'female'
+    ? selectFemaleTemplate(daysPerWeek, experience)
     : selectTemplate(daysPerWeek, experience);
   // Use user-selected days if provided, otherwise fall back to template defaults
   const trainingDayIndices = (input.trainingDays && input.trainingDays.length === daysPerWeek)

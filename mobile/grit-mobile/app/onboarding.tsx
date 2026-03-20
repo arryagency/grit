@@ -11,6 +11,7 @@ import {
 } from 'react-native';
 import { useState, useRef, useEffect, memo } from 'react';
 import { router } from 'expo-router';
+import { Ionicons } from '@expo/vector-icons';
 import { saveProfile, UserProfile } from '@/utils/storage';
 // notifications are scheduled when program is saved, not at onboarding
 import { COLORS, SPACING, FONT_SIZE, RADIUS } from '@/constants/theme';
@@ -45,13 +46,14 @@ const TIME_ITEM_H = 52;
 const PICKER_VISIBLE = 5; // odd number so middle item is the selected one
 const PICKER_H = TIME_ITEM_H * PICKER_VISIBLE;
 
-const TOTAL_STEPS = 7;
+const TOTAL_STEPS = 8;
 
 export default function OnboardingScreen() {
   const [step, setStep] = useState(0);
   const [name, setName] = useState('');
   const [trainingAge, setTrainingAge] = useState<'beginner' | 'intermediate' | 'advanced' | ''>('');
-  const [goal, setGoal] = useState('');
+  const [goal, setGoal] = useState<string[]>([]);
+  const [weightUnit, setWeightUnit] = useState<'kg' | 'lbs' | ''>('');
   const [equipment, setEquipment] = useState('');
   const [gymTime, setGymTime] = useState('');
   const [injuries, setInjuries] = useState('');
@@ -63,7 +65,9 @@ export default function OnboardingScreen() {
     const profile: UserProfile = {
       name: name.trim() || 'Athlete',
       trainingAge: trainingAge as UserProfile['trainingAge'],
-      goal,
+      goal: goal[0] ?? '',
+      goals: goal,
+      weightUnit: weightUnit as 'kg' | 'lbs' || undefined,
       gymTime: gymTime || undefined,
       equipment,
       injuries,
@@ -82,11 +86,12 @@ export default function OnboardingScreen() {
   function canAdvance() {
     if (step === 0) return name.trim().length > 0;
     if (step === 1) return trainingAge !== '';
-    if (step === 2) return goal !== '';
-    if (step === 3) return equipment !== '';
-    if (step === 4) return true; // gym time is optional
-    if (step === 5) return true; // injuries optional
-    if (step === 6) return userMode !== '';
+    if (step === 2) return goal.length > 0;
+    if (step === 3) return weightUnit !== '';
+    if (step === 4) return equipment !== '';
+    if (step === 5) return true; // gym time is optional
+    if (step === 6) return true; // injuries optional
+    if (step === 7) return userMode !== '';
     return true;
   }
 
@@ -165,22 +170,57 @@ export default function OnboardingScreen() {
             <View style={styles.stepContainer}>
               <Text style={styles.stepLabel}>Step 3 of {TOTAL_STEPS}</Text>
               <Text style={styles.question}>What's the goal, {name}?</Text>
-              {GOAL_OPTIONS.map((g) => (
+              <Text style={styles.subText}>Select all that apply.</Text>
+              {GOAL_OPTIONS.map((g) => {
+                const selected = goal.includes(g);
+                return (
+                  <TouchableOpacity
+                    key={g}
+                    style={[styles.optionCard, styles.optionCardRow, selected && styles.optionCardActive]}
+                    onPress={() =>
+                      setGoal((prev) =>
+                        prev.includes(g) ? prev.filter((x) => x !== g) : [...prev, g]
+                      )
+                    }
+                  >
+                    <Text style={[styles.optionLabel, selected && styles.optionLabelActive]}>{g}</Text>
+                    {selected && (
+                      <Ionicons name="checkmark-circle" size={20} color={COLORS.accent} />
+                    )}
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+          )}
+
+          {/* Step 3 – Weight unit */}
+          {step === 3 && (
+            <View style={styles.stepContainer}>
+              <Text style={styles.stepLabel}>Step 4 of {TOTAL_STEPS}</Text>
+              <Text style={styles.question}>What units do you use?</Text>
+              {(
+                [
+                  { value: 'kg' as const, label: 'KG (kilograms)' },
+                  { value: 'lbs' as const, label: 'LBS (pounds)' },
+                ]
+              ).map((opt) => (
                 <TouchableOpacity
-                  key={g}
-                  style={[styles.optionCard, goal === g && styles.optionCardActive]}
-                  onPress={() => setGoal(g)}
+                  key={opt.value}
+                  style={[styles.optionCard, weightUnit === opt.value && styles.optionCardActive]}
+                  onPress={() => setWeightUnit(opt.value)}
                 >
-                  <Text style={[styles.optionLabel, goal === g && styles.optionLabelActive]}>{g}</Text>
+                  <Text style={[styles.optionLabel, weightUnit === opt.value && styles.optionLabelActive]}>
+                    {opt.label}
+                  </Text>
                 </TouchableOpacity>
               ))}
             </View>
           )}
 
-          {/* Step 3 – Equipment */}
-          {step === 3 && (
+          {/* Step 4 – Equipment */}
+          {step === 4 && (
             <View style={styles.stepContainer}>
-              <Text style={styles.stepLabel}>Step 4 of {TOTAL_STEPS}</Text>
+              <Text style={styles.stepLabel}>Step 5 of {TOTAL_STEPS}</Text>
               <Text style={styles.question}>What equipment do you have access to?</Text>
               {EQUIPMENT_OPTIONS.map((e) => (
                 <TouchableOpacity
@@ -194,10 +234,10 @@ export default function OnboardingScreen() {
             </View>
           )}
 
-          {/* Step 4 – Gym time */}
-          {step === 4 && (
+          {/* Step 5 – Gym time */}
+          {step === 5 && (
             <View style={styles.stepContainer}>
-              <Text style={styles.stepLabel}>Step 5 of {TOTAL_STEPS}</Text>
+              <Text style={styles.stepLabel}>Step 6 of {TOTAL_STEPS}</Text>
               <Text style={styles.question}>What time do you usually train?</Text>
               <Text style={styles.subText}>
                 We'll send a heads-up 15 mins before, and check in if you skip.
@@ -218,10 +258,10 @@ export default function OnboardingScreen() {
             </View>
           )}
 
-          {/* Step 5 – Injuries */}
-          {step === 5 && (
+          {/* Step 6 – Injuries */}
+          {step === 6 && (
             <View style={styles.stepContainer}>
-              <Text style={styles.stepLabel}>Step 6 of {TOTAL_STEPS}</Text>
+              <Text style={styles.stepLabel}>Step 7 of {TOTAL_STEPS}</Text>
               <Text style={styles.question}>Any injuries or limitations to know about?</Text>
               <Text style={styles.subText}>Optional. Skip if nothing relevant.</Text>
               <TextInput
@@ -236,10 +276,10 @@ export default function OnboardingScreen() {
             </View>
           )}
 
-          {/* Step 6 – How to use GRIT */}
-          {step === 6 && (
+          {/* Step 7 – How to use GRIT */}
+          {step === 7 && (
             <View style={styles.stepContainer}>
-              <Text style={styles.stepLabel}>Step 7 of {TOTAL_STEPS}</Text>
+              <Text style={styles.stepLabel}>Step 8 of {TOTAL_STEPS}</Text>
               <Text style={styles.question}>How do you want to use GRIT?</Text>
               <Text style={styles.subText}>You can change this later in Settings.</Text>
               {(
@@ -525,6 +565,11 @@ const styles = StyleSheet.create({
     borderRadius: RADIUS.md,
     padding: SPACING.lg,
     gap: SPACING.xs,
+  },
+  optionCardRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
   },
   optionCardActive: {
     borderColor: COLORS.accent,
