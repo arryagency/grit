@@ -7,6 +7,7 @@ import {
   TouchableOpacity,
   Switch,
   Alert,
+  TextInput,
 } from 'react-native';
 import { useState, useCallback } from 'react';
 import { useFocusEffect, router } from 'expo-router';
@@ -47,7 +48,7 @@ export default function SettingsScreen() {
   function confirmReset() {
     Alert.alert(
       'Reset all data?',
-      'Wipes every session, PR, programme, and your profile. Cannot be undone.',
+      'Wipes every session, PR, program, and your profile. Cannot be undone.',
       [
         { text: 'Cancel', style: 'cancel' },
         {
@@ -126,6 +127,46 @@ export default function SettingsScreen() {
             value={settings.customReminder}
             onToggle={(v) => toggle('customReminder', v)}
           />
+          {settings.customReminder && (
+            <View style={styles.inlineInputs}>
+              <TextInput
+                style={styles.reminderTextInput}
+                value={settings.customReminderText}
+                onChangeText={(text) => {
+                  const updated = { ...settings, customReminderText: text };
+                  setSettings(updated);
+                  saveNotificationSettings({ customReminderText: text });
+                }}
+                placeholder="e.g. Take your supplements"
+                placeholderTextColor={COLORS.textMuted}
+                returnKeyType="done"
+              />
+              <Text style={styles.inlineLabel}>Time</Text>
+              <View style={styles.timePresets}>
+                {['07:00', '08:00', '09:00', '12:00', '18:00', '21:00'].map((t) => (
+                  <TouchableOpacity
+                    key={t}
+                    style={[
+                      styles.timePreset,
+                      settings.customReminderTime === t && styles.timePresetActive,
+                    ]}
+                    onPress={() => {
+                      const updated = { ...settings, customReminderTime: t };
+                      setSettings(updated);
+                      saveNotificationSettings({ customReminderTime: t });
+                    }}
+                  >
+                    <Text style={[
+                      styles.timePresetText,
+                      settings.customReminderTime === t && styles.timePresetTextActive,
+                    ]}>
+                      {t}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+            </View>
+          )}
         </View>
 
         {/* Danger zone */}
@@ -249,5 +290,53 @@ const styles = StyleSheet.create({
   dangerDescription: {
     fontSize: FONT_SIZE.xs,
     color: COLORS.textSecondary,
+  },
+  inlineInputs: {
+    paddingHorizontal: SPACING.lg,
+    paddingBottom: SPACING.md,
+    gap: SPACING.sm,
+  },
+  reminderTextInput: {
+    backgroundColor: COLORS.background,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    borderRadius: RADIUS.sm,
+    paddingHorizontal: SPACING.md,
+    paddingVertical: SPACING.sm,
+    color: COLORS.text,
+    fontSize: FONT_SIZE.sm,
+  },
+  inlineLabel: {
+    fontSize: FONT_SIZE.xs,
+    color: COLORS.textMuted,
+    fontWeight: '600',
+    textTransform: 'uppercase',
+    letterSpacing: 0.8,
+    marginTop: SPACING.xs,
+  },
+  timePresets: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: SPACING.xs,
+  },
+  timePreset: {
+    paddingHorizontal: SPACING.md,
+    paddingVertical: SPACING.xs,
+    borderRadius: RADIUS.sm,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    backgroundColor: COLORS.background,
+  },
+  timePresetActive: {
+    borderColor: COLORS.accent,
+    backgroundColor: COLORS.accent + '20',
+  },
+  timePresetText: {
+    fontSize: FONT_SIZE.sm,
+    color: COLORS.textSecondary,
+    fontWeight: '600',
+  },
+  timePresetTextActive: {
+    color: COLORS.accent,
   },
 });

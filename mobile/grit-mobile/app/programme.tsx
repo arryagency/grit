@@ -13,20 +13,20 @@ import { router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { COLORS, SPACING, FONT_SIZE, RADIUS } from '@/constants/theme';
 import {
-  buildProgramme,
+  buildProgram,
   mapProfileGoal,
   type Goal,
   type Experience,
   type TrainingDays,
   type Gender,
-  type Programme,
-} from '@/utils/programmeBuilder';
+  type Program,
+} from '@/utils/programBuilder';
 import {
   getProfile,
-  getProgrammePrefs,
-  saveProgrammePrefs,
-  saveProgramme as saveToStorage,
-  getSavedProgramme,
+  getProgramPrefs,
+  saveProgramPrefs,
+  saveProgram as saveToStorage,
+  getSavedProgram,
 } from '@/utils/storage';
 
 // ─── Types ──────────────────────────────────────────────────────────
@@ -82,7 +82,7 @@ const LOADING_MESSAGES = [
   'Calculating optimal volume…',
   'Structuring your weekly split…',
   'Applying progressive overload model…',
-  'Finalising your programme…',
+  'Finalising your program…',
 ];
 
 const MUSCLE_GROUP_COLORS: Record<string, string> = {
@@ -102,13 +102,14 @@ const MUSCLE_GROUP_COLORS: Record<string, string> = {
 
 // ─── Component ───────────────────────────────────────────────────────
 
-export default function ProgrammeScreen() {
+export default function ProgramScreen() {
   const [step, setStep] = useState(-1); // -1 = loading profile
   const [answers, setAnswers] = useState<Answers>({
     goal: null, experience: null, daysPerWeek: null, trainingDays: null, gender: null,
   });
+  const [profileEquipment, setProfileEquipment] = useState<string | undefined>(undefined);
   const [generating, setGenerating] = useState(false);
-  const [programme, setProgramme] = useState<Programme | null>(null);
+  const [program, setProgram] = useState<Program | null>(null);
   const [saved, setSaved] = useState(false);
   const [loadingMsg, setLoadingMsg] = useState(0);
   const [showBeginnerWarning, setShowBeginnerWarning] = useState(false);
@@ -120,15 +121,15 @@ export default function ProgrammeScreen() {
     async function init() {
       const [profile, prefs, existing] = await Promise.all([
         getProfile(),
-        getProgrammePrefs(),
-        getSavedProgramme(),
+        getProgramPrefs(),
+        getSavedProgram(),
       ]);
 
       // Build prefilled answers.
       // goal + experience can come from onboarding profile as a convenience.
       // daysPerWeek must NEVER come from the profile — onboarding days (general
-      // training frequency) is not the same as programme days. Only use a
-      // previously saved programme-builder pref, or leave null so the user
+      // training frequency) is not the same as program days. Only use a
+      // previously saved program-builder pref, or leave null so the user
       // must pick explicitly.
       const goalSource         = prefs?.goal         ?? mapProfileGoal(profile?.goal) ?? null;
       const experienceSource   = prefs?.experience   ?? (profile?.trainingAge as Experience) ?? null;
@@ -144,10 +145,11 @@ export default function ProgrammeScreen() {
         gender:       genderSource,
       };
       setAnswers(prefilled);
+      setProfileEquipment(profile?.equipment);
 
-      // If there's already a saved programme, show it right away (can regenerate)
+      // If there's already a saved program, show it right away (can regenerate)
       if (existing) {
-        setProgramme(existing.programme);
+        setProgram(existing.program);
         setSaved(true);
         setStep(5);
         return;
@@ -179,7 +181,7 @@ export default function ProgrammeScreen() {
   function runGenerate(a: Answers) {
     setStep(5);
     setGenerating(true);
-    setProgramme(null);
+    setProgram(null);
     setSaved(false);
     progressAnim.setValue(0);
 
@@ -194,11 +196,22 @@ export default function ProgrammeScreen() {
       duration: 5000,
       useNativeDriver: false,
     }).start(() => {
-      const result = buildProgramme({ goal, experience, daysPerWeek, trainingDays, gender });
-      setProgramme(result);
+      const result = buildProgram({ goal, experience, daysPerWeek, trainingDays, gender, equipment: profileEquipment });
+      setProgram(result);
       setGenerating(false);
-      saveProgrammePrefs({ goal, experience, daysPerWeek, trainingDays: trainingDays ?? result.trainingDayIndices, gender });
+      saveProgramPrefs({ goal, experience, daysPerWeek, trainingDays: trainingDays ?? result.trainingDayIndices, gender });
     });
+  }
+
+  function smartDayDefaults(days: number): number[] {
+    const map: Record<number, number[]> = {
+      2: [1, 4],
+      3: [1, 3, 5],
+      4: [1, 2, 4, 5],
+      5: [1, 2, 3, 5, 6],
+      6: [1, 2, 3, 4, 5, 6],
+    };
+    return map[days] ?? [];
   }
 
   function proceed() {
@@ -211,9 +224,10 @@ export default function ProgrammeScreen() {
       setShowBeginnerWarning(true);
       return;
     }
-    // When days/week changes, clear the specific day selection so user must re-pick
+    // When days/week changes, reset day selection and apply smart defaults
     if (step === 2) {
-      setAnswers(a => ({ ...a, trainingDays: null }));
+      const sd = answers.daysPerWeek ? smartDayDefaults(answers.daysPerWeek) : null;
+      setAnswers(a => ({ ...a, trainingDays: sd }));
     }
     setStep(s => s + 1);
   }
@@ -239,7 +253,7 @@ export default function ProgrammeScreen() {
 
   function restart() {
     setAnswers({ goal: null, experience: null, daysPerWeek: null, trainingDays: null, gender: null });
-    setProgramme(null);
+    setProgram(null);
     setSaved(false);
     progressAnim.setValue(0);
     setStep(0);
@@ -251,10 +265,10 @@ export default function ProgrammeScreen() {
   }
 
   async function handleSave() {
-    if (!programme) return;
-    await saveToStorage(programme);
+    if (!program) return;
+    await saveToStorage(program);
     setSaved(true);
-    Alert.alert('Saved', 'Your programme is saved to the home screen.', [
+    Alert.alert('Saved', 'Your program is saved to the home screen.', [
       { text: 'OK', onPress: () => router.replace('/(tabs)/') },
     ]);
   }
@@ -272,7 +286,7 @@ export default function ProgrammeScreen() {
           <Ionicons name="arrow-back" size={22} color={generating ? COLORS.textMuted : COLORS.text} />
         </TouchableOpacity>
         <View style={styles.headerCenter}>
-          <Text style={styles.headerTitle}>Build my programme</Text>
+          <Text style={styles.headerTitle}>Build my program</Text>
           {step >= 0 && step < 5 && (
             <Text style={styles.headerStep}>
               Step {step + 1} of 5
@@ -302,7 +316,7 @@ export default function ProgrammeScreen() {
             <TouchableOpacity
               style={[styles.optionCard, styles.optionCardActive]}
               onPress={() => {
-                setAnswers(a => ({ ...a, daysPerWeek: 3, trainingDays: null }));
+                setAnswers(a => ({ ...a, daysPerWeek: 3, trainingDays: smartDayDefaults(3) }));
                 setShowBeginnerWarning(false);
                 setStep(3);
               }}
@@ -321,6 +335,10 @@ export default function ProgrammeScreen() {
             <TouchableOpacity
               style={styles.optionCard}
               onPress={() => {
+                setAnswers(a => ({
+                  ...a,
+                  trainingDays: a.daysPerWeek ? smartDayDefaults(a.daysPerWeek) : null,
+                }));
                 setShowBeginnerWarning(false);
                 setStep(3);
               }}
@@ -330,10 +348,21 @@ export default function ProgrammeScreen() {
                 <Text style={styles.optionLabel}>Keep my {answers.daysPerWeek} days</Text>
               </View>
               <Text style={styles.optionDesc}>
-                {`We'll build you a beginner-appropriate ${answers.daysPerWeek}-day programme.`}
+                {`We'll build you a beginner-appropriate ${answers.daysPerWeek}-day program.`}
               </Text>
             </TouchableOpacity>
           </View>
+          <TouchableOpacity
+            style={styles.warningGoBack}
+            onPress={() => {
+              setShowBeginnerWarning(false);
+              // stay on step 2 so user can change days
+            }}
+            activeOpacity={0.7}
+          >
+            <Ionicons name="arrow-back" size={15} color={COLORS.textMuted} />
+            <Text style={styles.warningGoBackText}>Go back — change my days</Text>
+          </TouchableOpacity>
         </ScrollView>
       )}
 
@@ -341,7 +370,7 @@ export default function ProgrammeScreen() {
       {!showBeginnerWarning && step === 0 && (
         <ScrollView contentContainerStyle={styles.stepContent}>
           <Text style={styles.stepTitle}>What's your goal?</Text>
-          <Text style={styles.stepSubtitle}>Your entire programme is built around this.</Text>
+          <Text style={styles.stepSubtitle}>Your entire program is built around this.</Text>
           <View style={styles.optionList}>
             {GOAL_OPTIONS.map(opt => (
               <OptionCard
@@ -527,7 +556,7 @@ export default function ProgrammeScreen() {
               <View style={styles.loadingIconWrap}>
                 <Ionicons name="sparkles" size={32} color={COLORS.accent} />
               </View>
-              <Text style={styles.loadingTitle}>Building your programme…</Text>
+              <Text style={styles.loadingTitle}>Building your program…</Text>
               <Text style={styles.loadingMsg}>{LOADING_MESSAGES[loadingMsg]}</Text>
               <View style={styles.loadingBarTrack}>
                 <Animated.View style={[styles.loadingBarFill, { width: progressWidth }]} />
@@ -536,9 +565,9 @@ export default function ProgrammeScreen() {
           )}
 
           {/* Result */}
-          {programme && !generating && (
-            <ProgrammeResult
-              programme={programme}
+          {program && !generating && (
+            <ProgramResult
+              program={program}
               saved={saved}
               onSave={handleSave}
               onRestart={restart}
@@ -557,7 +586,7 @@ export default function ProgrammeScreen() {
             disabled={!canProceed()}
           >
             <Text style={styles.nextBtnText}>
-              {step === 4 ? 'Build my programme' : 'Next'}
+              {step === 4 ? 'Build my program' : 'Next'}
             </Text>
             {step === 4 && <Ionicons name="flash" size={16} color={COLORS.background} />}
           </TouchableOpacity>
@@ -587,10 +616,10 @@ function OptionCard({
   );
 }
 
-function ProgrammeResult({
-  programme, saved, onSave, onRestart, onEditDays,
+function ProgramResult({
+  program, saved, onSave, onRestart, onEditDays,
 }: {
-  programme: Programme;
+  program: Program;
   saved: boolean;
   onSave: () => void;
   onRestart: () => void;
@@ -607,21 +636,21 @@ function ProgrammeResult({
     <>
       {/* Header */}
       <View style={styles.resultHeader}>
-        <Text style={styles.resultBadge}>YOUR PROGRAMME</Text>
-        <Text style={styles.resultTitle}>{programme.title}</Text>
-        <Text style={styles.resultSplit}>{programme.splitName}</Text>
+        <Text style={styles.resultBadge}>YOUR PROGRAM</Text>
+        <Text style={styles.resultTitle}>{program.title}</Text>
+        <Text style={styles.resultSplit}>{program.splitName}</Text>
       </View>
 
       {/* Stats strip */}
       <View style={styles.statsStrip}>
-        <StatPill icon="calendar-outline" value={`${programme.stats.sessionsPerWeek}×`} label="per week" />
-        <StatPill icon="time-outline" value={programme.stats.estimatedDuration} label="per session" />
-        <StatPill icon="body-outline" value={`${programme.stats.muscleGroups.length}`} label="muscle groups" />
+        <StatPill icon="calendar-outline" value={`${program.stats.sessionsPerWeek}×`} label="per week" />
+        <StatPill icon="time-outline" value={program.stats.estimatedDuration} label="per session" />
+        <StatPill icon="body-outline" value={`${program.stats.muscleGroups.length}`} label="muscle groups" />
       </View>
 
       {/* 7-day calendar */}
       <View style={styles.calendarStrip}>
-        {programme.schedule.map((day, i) => (
+        {program.schedule.map((day, i) => (
           <View key={i} style={[styles.calendarDay, !day.isRest && styles.calendarDayActive]}>
             <Text style={[styles.calendarDayName, !day.isRest && styles.calendarDayNameActive]}>
               {day.dayName}
@@ -637,28 +666,28 @@ function ProgrammeResult({
 
       {/* Rationale */}
       <View style={styles.rationaleCard}>
-        <Text style={styles.rationaleText}>{programme.rationale}</Text>
+        <Text style={styles.rationaleText}>{program.rationale}</Text>
       </View>
 
       {/* Sessions */}
-      {programme.sessions.map((session, si) => (
+      {program.sessions.map((session, si) => (
         <SessionCard key={si} session={session} index={si} />
       ))}
 
       {/* Progression + Deload */}
-      <InfoBlock icon="trending-up-outline" label="PROGRESSION" text={programme.progression} />
-      <InfoBlock icon="refresh-outline" label="DELOAD" text={programme.deload} />
-      {programme.fatLossNote && (
-        <InfoBlock icon="alert-circle-outline" label="FAT LOSS PHASE" text={programme.fatLossNote} accent />
+      <InfoBlock icon="trending-up-outline" label="PROGRESSION" text={program.progression} />
+      <InfoBlock icon="refresh-outline" label="DELOAD" text={program.deload} />
+      {program.fatLossNote && (
+        <InfoBlock icon="alert-circle-outline" label="FAT LOSS PHASE" text={program.fatLossNote} accent />
       )}
-      <InfoBlock icon="bulb-outline" label="KEY FOCUS" text={programme.keyNote} accent />
+      <InfoBlock icon="bulb-outline" label="KEY FOCUS" text={program.keyNote} accent />
 
       {/* Action buttons */}
       <View style={styles.actionRow}>
         {!saved ? (
           <TouchableOpacity style={styles.saveBtn} onPress={onSave}>
             <Ionicons name="bookmark-outline" size={16} color={COLORS.background} />
-            <Text style={styles.saveBtnText}>Save this programme</Text>
+            <Text style={styles.saveBtnText}>Save this program</Text>
           </TouchableOpacity>
         ) : (
           <View style={styles.savedBadge}>
@@ -683,7 +712,7 @@ function ProgrammeResult({
   );
 }
 
-function SessionCard({ session, index }: { session: import('@/utils/programmeBuilder').ProgrammeSession; index: number }) {
+function SessionCard({ session, index }: { session: import('@/utils/programBuilder').ProgramSession; index: number }) {
   return (
     <View style={styles.sessionCard}>
       {/* Card header */}
@@ -913,6 +942,16 @@ const styles = StyleSheet.create({
     marginBottom: SPACING.lg,
   },
   rationaleText: { fontSize: FONT_SIZE.sm, color: COLORS.textSecondary, lineHeight: 20 },
+  warningGoBack: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginTop: SPACING.lg,
+    alignSelf: 'center',
+    paddingVertical: SPACING.sm,
+    paddingHorizontal: SPACING.md,
+  },
+  warningGoBackText: { fontSize: FONT_SIZE.sm, color: COLORS.textMuted },
 
   // Session card
   sessionCard: {

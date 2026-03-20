@@ -13,7 +13,7 @@ export interface UserProfile {
   injuries: string;
   onboardingComplete: boolean;
   createdAt: string;
-  userMode?: 'guided' | 'self'; // 'guided' = wants programme/suggestions, 'self' = just tracking
+  userMode?: 'guided' | 'self'; // 'guided' = wants program/suggestions, 'self' = just tracking
 }
 
 export interface SetLog {
@@ -102,17 +102,17 @@ export interface ProgressionSuggestion {
   createdAt: string;
 }
 
-export interface SavedProgramme {
-  programme: import('./programmeBuilder').Programme;
+export interface SavedProgram {
+  program: import('./programBuilder').Program;
   savedAt: string; // ISO string
 }
 
-export interface ProgrammePrefs {
-  goal: import('./programmeBuilder').Goal;
-  experience: import('./programmeBuilder').Experience;
-  daysPerWeek: import('./programmeBuilder').TrainingDays;
+export interface ProgramPrefs {
+  goal: import('./programBuilder').Goal;
+  experience: import('./programBuilder').Experience;
+  daysPerWeek: import('./programBuilder').TrainingDays;
   trainingDays?: number[]; // specific weekday indices selected by user, 0=Sun…6=Sat
-  gender: import('./programmeBuilder').Gender;
+  gender: import('./programBuilder').Gender;
 }
 
 // ─── Keys ────────────────────────────────────────────────────────────────────
@@ -126,8 +126,8 @@ const KEYS = {
   TEMPLATES: '@grit/templates',
   PHYSIQUE: '@grit/physique',
   SETTINGS: '@grit/settings',
-  SAVED_PROGRAMME: '@grit/savedProgramme',
-  PROGRAMME_PREFS: '@grit/programmePrefs',
+  SAVED_PROGRAM: '@grit/savedProgram',
+  PROGRAM_PREFS: '@grit/programPrefs',
   NOTIFICATION_SETTINGS: '@grit/notificationSettings',
   PROGRESSION_SUGGESTIONS: '@grit/progressionSuggestions',
 };
@@ -394,39 +394,39 @@ export async function saveSettings(settings: Partial<AppSettings>): Promise<void
   await AsyncStorage.setItem(KEYS.SETTINGS, JSON.stringify({ ...current, ...settings }));
 }
 
-// ─── Saved Programme ─────────────────────────────────────────────────────────
+// ─── Saved Program ────────────────────────────────────────────────────────────
 
-export async function getSavedProgramme(): Promise<SavedProgramme | null> {
+export async function getSavedProgram(): Promise<SavedProgram | null> {
   try {
-    const data = await AsyncStorage.getItem(KEYS.SAVED_PROGRAMME);
+    const data = await AsyncStorage.getItem(KEYS.SAVED_PROGRAM);
     return data ? JSON.parse(data) : null;
   } catch {
     return null;
   }
 }
 
-export async function saveProgramme(programme: SavedProgramme['programme']): Promise<void> {
-  const entry: SavedProgramme = { programme, savedAt: new Date().toISOString() };
-  await AsyncStorage.setItem(KEYS.SAVED_PROGRAMME, JSON.stringify(entry));
+export async function saveProgram(program: SavedProgram['program']): Promise<void> {
+  const entry: SavedProgram = { program, savedAt: new Date().toISOString() };
+  await AsyncStorage.setItem(KEYS.SAVED_PROGRAM, JSON.stringify(entry));
 }
 
-export async function deleteSavedProgramme(): Promise<void> {
-  await AsyncStorage.removeItem(KEYS.SAVED_PROGRAMME);
+export async function deleteSavedProgram(): Promise<void> {
+  await AsyncStorage.removeItem(KEYS.SAVED_PROGRAM);
 }
 
-// ─── Programme Prefs ─────────────────────────────────────────────────────────
+// ─── Program Prefs ────────────────────────────────────────────────────────────
 
-export async function getProgrammePrefs(): Promise<ProgrammePrefs | null> {
+export async function getProgramPrefs(): Promise<ProgramPrefs | null> {
   try {
-    const data = await AsyncStorage.getItem(KEYS.PROGRAMME_PREFS);
+    const data = await AsyncStorage.getItem(KEYS.PROGRAM_PREFS);
     return data ? JSON.parse(data) : null;
   } catch {
     return null;
   }
 }
 
-export async function saveProgrammePrefs(prefs: ProgrammePrefs): Promise<void> {
-  await AsyncStorage.setItem(KEYS.PROGRAMME_PREFS, JSON.stringify(prefs));
+export async function saveProgramPrefs(prefs: ProgramPrefs): Promise<void> {
+  await AsyncStorage.setItem(KEYS.PROGRAM_PREFS, JSON.stringify(prefs));
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────

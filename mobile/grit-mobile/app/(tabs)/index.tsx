@@ -21,8 +21,8 @@ import {
   formatDate,
   getBodyWeightEntries,
   getBodyWeightTrend,
-  getSavedProgramme,
-  SavedProgramme,
+  getSavedProgram,
+  SavedProgram,
   BodyWeightEntry,
   getProgressionSuggestions,
   ProgressionSuggestion,
@@ -37,7 +37,7 @@ export default function HomeScreen() {
   const [sessions, setSessions] = useState<WorkoutSession[]>([]);
   const [refreshing, setRefreshing] = useState(false);
   const [bodyWeightEntries, setBodyWeightEntries] = useState<BodyWeightEntry[]>([]);
-  const [savedProgramme, setSavedProgramme] = useState<SavedProgramme | null>(null);
+  const [savedProgram, setSavedProgram] = useState<SavedProgram | null>(null);
   const [progressionSuggestions, setProgressionSuggestions] = useState<ProgressionSuggestion[]>([]);
 
   async function load() {
@@ -45,13 +45,13 @@ export default function HomeScreen() {
       getProfile(),
       getSessions(),
       getBodyWeightEntries(),
-      getSavedProgramme(),
+      getSavedProgram(),
       getProgressionSuggestions(),
     ]);
     setProfile(p);
     setSessions(s);
     setBodyWeightEntries(bw);
-    setSavedProgramme(sp);
+    setSavedProgram(sp);
     setProgressionSuggestions(ps);
   }
 
@@ -232,57 +232,58 @@ export default function HomeScreen() {
           </TouchableOpacity>
         </View>
 
-        {/* Saved programme card — guided mode only */}
-        {isGuidedMode && savedProgramme && (
+        {/* Saved program card — guided mode only */}
+        {isGuidedMode && savedProgram && (
           <View style={styles.section}>
-            <Text style={styles.sectionLabel}>My Programme</Text>
+            <Text style={styles.sectionLabel}>My Program</Text>
             <TouchableOpacity
-              style={styles.savedProgrammeCard}
+              style={styles.savedProgramCard}
               onPress={() => router.push('/programme')}
               activeOpacity={0.7}
             >
-              <View style={styles.savedProgrammeLeft}>
-                <Text style={styles.savedProgrammeTitle}>{savedProgramme.programme.title}</Text>
-                <Text style={styles.savedProgrammeSplit}>{savedProgramme.programme.splitName}</Text>
-                <View style={styles.savedProgrammeMeta}>
-                  {getNextSession(savedProgramme.programme) && (
-                    <Text style={styles.savedProgrammeNext}>
-                      {getNextSession(savedProgramme.programme)}
+              <View style={styles.savedProgramLeft}>
+                <Text style={styles.savedProgramTitle}>{savedProgram.program.title}</Text>
+                <Text style={styles.savedProgramSplit}>{savedProgram.program.splitName}</Text>
+                <View style={styles.savedProgramMeta}>
+                  {getNextSession(savedProgram.program) && (
+                    <Text style={styles.savedProgramNext}>
+                      {getNextSession(savedProgram.program)}
                     </Text>
                   )}
                 </View>
               </View>
-              <View style={styles.savedProgrammeArrow}>
+              <View style={styles.savedProgramArrow}>
                 <Ionicons name="chevron-forward" size={18} color={COLORS.accent} />
               </View>
             </TouchableOpacity>
           </View>
         )}
 
-        {/* Programme builder CTA — guided mode only */}
-        {isGuidedMode && (
-          <View style={styles.section}>
-            <TouchableOpacity
-              style={styles.programmeCard}
-              onPress={() => router.push('/programme')}
-              activeOpacity={0.7}
-            >
-              <View style={styles.programmeLeft}>
-                <Text style={styles.programmeTitle}>
-                  {savedProgramme ? 'Rebuild my programme' : 'Build my programme'}
-                </Text>
-                <Text style={styles.programmeSubtitle}>
-                  {savedProgramme
-                    ? 'Generate a new programme with different settings'
-                    : 'Get a personalised plan built around your goal and schedule'}
-                </Text>
-              </View>
-              <View style={styles.programmeIcon}>
-                <Ionicons name="sparkles" size={20} color={COLORS.background} />
-              </View>
-            </TouchableOpacity>
-          </View>
-        )}
+        {/* Program builder CTA — visible for all users */}
+        <View style={styles.section}>
+          {!isGuidedMode && !savedProgram && (
+            <Text style={styles.optionalLabel}>Optional — build a program anytime</Text>
+          )}
+          <TouchableOpacity
+            style={styles.programCard}
+            onPress={() => router.push('/programme')}
+            activeOpacity={0.7}
+          >
+            <View style={styles.programLeft}>
+              <Text style={styles.programTitle}>
+                {savedProgram ? 'Rebuild my program' : 'Build my program'}
+              </Text>
+              <Text style={styles.programSubtitle}>
+                {savedProgram
+                  ? 'Generate a new program with different settings'
+                  : 'Get a personalised plan built around your goal and schedule'}
+              </Text>
+            </View>
+            <View style={styles.programIcon}>
+              <Ionicons name="sparkles" size={20} color={COLORS.background} />
+            </View>
+          </TouchableOpacity>
+        </View>
 
         {/* Stats row */}
         <View style={styles.statsRow}>
@@ -356,9 +357,9 @@ export default function HomeScreen() {
   );
 }
 
-function getNextSession(programme: import('@/utils/programmeBuilder').Programme): string | null {
+function getNextSession(program: import('@/utils/programBuilder').Program): string | null {
   const todayJS = new Date().getDay();
-  const { trainingDayIndices, sessions } = programme;
+  const { trainingDayIndices, sessions } = program;
   if (!trainingDayIndices?.length || !sessions?.length) return null;
 
   for (let offset = 0; offset < 7; offset++) {
@@ -525,8 +526,8 @@ const styles = StyleSheet.create({
   bwSeeMore: { fontSize: FONT_SIZE.xs, color: COLORS.accent, fontWeight: '600' },
   bwWidgetEmpty: { flexDirection: 'row', alignItems: 'center', gap: SPACING.sm },
   bwEmptyText: { fontSize: FONT_SIZE.sm, color: COLORS.textMuted },
-  // Saved programme card
-  savedProgrammeCard: {
+  // Saved program card
+  savedProgramCard: {
     backgroundColor: COLORS.surface,
     borderRadius: RADIUS.md,
     borderWidth: 1,
@@ -538,14 +539,22 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: SPACING.md,
   },
-  savedProgrammeLeft: { flex: 1, gap: 3 },
-  savedProgrammeTitle: { fontSize: FONT_SIZE.md, fontWeight: '900', color: COLORS.text },
-  savedProgrammeSplit: { fontSize: FONT_SIZE.sm, color: COLORS.textSecondary },
-  savedProgrammeMeta: { marginTop: 3 },
-  savedProgrammeNext: { fontSize: FONT_SIZE.sm, color: COLORS.accent, fontWeight: '700' },
-  savedProgrammeArrow: { opacity: 0.8 },
-  // Programme card
-  programmeCard: {
+  savedProgramLeft: { flex: 1, gap: 3 },
+  savedProgramTitle: { fontSize: FONT_SIZE.md, fontWeight: '900', color: COLORS.text },
+  savedProgramSplit: { fontSize: FONT_SIZE.sm, color: COLORS.textSecondary },
+  savedProgramMeta: { marginTop: 3 },
+  savedProgramNext: { fontSize: FONT_SIZE.sm, color: COLORS.accent, fontWeight: '700' },
+  savedProgramArrow: { opacity: 0.8 },
+  optionalLabel: {
+    fontSize: FONT_SIZE.xs,
+    color: COLORS.textMuted,
+    fontWeight: '600',
+    marginBottom: SPACING.xs,
+    textTransform: 'uppercase',
+    letterSpacing: 0.8,
+  },
+  // Program card
+  programCard: {
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: COLORS.surface,
@@ -557,14 +566,14 @@ const styles = StyleSheet.create({
     padding: SPACING.lg,
     gap: SPACING.md,
   },
-  programmeLeft: { flex: 1, gap: 3 },
-  programmeTitle: { fontSize: FONT_SIZE.md, fontWeight: '800', color: COLORS.text },
-  programmeSubtitle: {
+  programLeft: { flex: 1, gap: 3 },
+  programTitle: { fontSize: FONT_SIZE.md, fontWeight: '800', color: COLORS.text },
+  programSubtitle: {
     fontSize: FONT_SIZE.sm,
     color: COLORS.textSecondary,
     lineHeight: 18,
   },
-  programmeIcon: {
+  programIcon: {
     width: 40,
     height: 40,
     borderRadius: RADIUS.md,

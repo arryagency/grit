@@ -35,8 +35,8 @@ import {
   saveTemplate,
   deleteTemplate,
   WorkoutTemplate,
-  getSavedProgramme,
-  SavedProgramme,
+  getSavedProgram,
+  SavedProgram,
   getProgressionSuggestions,
   saveProgressionSuggestions,
   clearProgressionSuggestion,
@@ -251,13 +251,13 @@ export default function WorkoutScreen() {
 
   // ─── Data Loading ────────────────────────────────────────────────────────────
 
-  const [savedProgramme, setSavedProgramme] = useState<SavedProgramme | null>(null);
+  const [savedProgram, setSavedProgram] = useState<SavedProgram | null>(null);
 
   useFocusEffect(
     useCallback(() => {
       getSessions().then(setAllSessions);
       getTemplates().then(setTemplates);
-      getSavedProgramme().then(setSavedProgramme);
+      getSavedProgram().then(setSavedProgram);
     }, [])
   );
 
@@ -392,6 +392,17 @@ export default function WorkoutScreen() {
   }
 
   function toggleSetComplete(exIdx: number, setIdx: number) {
+    const willBeCompleted = !session.exercises[exIdx]?.sets[setIdx]?.completed;
+
+    // Validate before marking complete
+    if (willBeCompleted) {
+      const set = session.exercises[exIdx]?.sets[setIdx];
+      if (!set || set.weight === 0 || set.reps === 0) {
+        Alert.alert('Missing info', 'Enter weight and reps before completing this set.');
+        return;
+      }
+    }
+
     setSession((prev) => {
       const exercises = [...prev.exercises];
       const ex = { ...exercises[exIdx] };
@@ -404,7 +415,6 @@ export default function WorkoutScreen() {
     });
 
     // Start rest timer when set is marked as complete
-    const willBeCompleted = !session.exercises[exIdx]?.sets[setIdx]?.completed;
     if (willBeCompleted) {
       startRestTimer();
     }
@@ -610,12 +620,12 @@ export default function WorkoutScreen() {
         onStart={onPressStart}
         sessions={allSessions}
         templates={templates}
-        savedProgramme={savedProgramme}
+        savedProgram={savedProgram}
         onLoadTemplate={loadTemplate}
         onDeleteTemplate={(id) => {
           deleteTemplate(id).then(() => getTemplates().then(setTemplates));
         }}
-        onLoadProgrammeSession={(exercises) => {
+        onLoadProgramSession={(exercises) => {
           setStartTime(new Date());
           setIsActive(true);
           setSession({
@@ -629,7 +639,7 @@ export default function WorkoutScreen() {
                 (lastEx ? Math.max(...lastEx.sets.filter((s) => s.weight > 0).map((s) => s.weight), 0) : 0);
               return {
                 name: ex.name,
-                sets: Array.from({ length: ex.sets }, () => emptySet(defaultWeight, ex.reps)),
+                sets: Array.from({ length: ex.sets }, () => emptySet(defaultWeight, 0)),
               };
             }),
             duration: 0,
@@ -1129,13 +1139,13 @@ interface IdleScreenProps {
   onStart: () => void;
   sessions: WorkoutSession[];
   templates: WorkoutTemplate[];
-  savedProgramme: SavedProgramme | null;
+  savedProgram: SavedProgram | null;
   onLoadTemplate: (t: WorkoutTemplate) => void;
   onDeleteTemplate: (id: string) => void;
-  onLoadProgrammeSession: (exercises: { name: string; sets: number; reps: number }[]) => void;
+  onLoadProgramSession: (exercises: { name: string; sets: number; reps: number }[]) => void;
 }
 
-function IdleScreen({ onStart, sessions, templates, savedProgramme, onLoadTemplate, onDeleteTemplate, onLoadProgrammeSession }: IdleScreenProps) {
+function IdleScreen({ onStart, sessions, templates, savedProgram, onLoadTemplate, onDeleteTemplate, onLoadProgramSession }: IdleScreenProps) {
   const lastSession = sessions[0];
 
   function confirmLoadTemplate(t: WorkoutTemplate) {
@@ -1175,20 +1185,20 @@ function IdleScreen({ onStart, sessions, templates, savedProgramme, onLoadTempla
         <View style={styles.quickHintCard}>
           <Ionicons name="flash-outline" size={16} color={COLORS.accent} />
           <Text style={styles.quickHintText}>
-            Inside a session: type <Text style={{ color: COLORS.accent }}>bench 80 4x8</Text> to log instantly — no tapping required
+            Log any lift instantly — type it like a note, and it organises itself. No menus, no tapping.
           </Text>
         </View>
 
         {/* Routines section */}
         <View style={styles.section}>
           <Text style={styles.sectionLabel}>Routines</Text>
-          {savedProgramme ? (
-            savedProgramme.programme.sessions.map((s, i) => (
+          {savedProgram ? (
+            savedProgram.program.sessions.map((s, i) => (
               <TouchableOpacity
                 key={i}
                 style={styles.routineCard}
                 onPress={() =>
-                  onLoadProgrammeSession(
+                  onLoadProgramSession(
                     s.exercises.map((e) => ({
                       name: e.name,
                       sets: e.sets,
@@ -1213,7 +1223,7 @@ function IdleScreen({ onStart, sessions, templates, savedProgramme, onLoadTempla
           ) : (
             <View style={styles.routineEmpty}>
               <Text style={styles.routineEmptyText}>
-                No routines yet. Build a programme or create your own routine below.
+                No routines yet. Build a program or create your own routine below.
               </Text>
             </View>
           )}

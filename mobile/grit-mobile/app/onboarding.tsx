@@ -12,10 +12,10 @@ import {
 import { useState, useRef, useEffect, memo } from 'react';
 import { router } from 'expo-router';
 import { saveProfile, UserProfile } from '@/utils/storage';
-// notifications are scheduled when programme is saved, not at onboarding
+// notifications are scheduled when program is saved, not at onboarding
 import { COLORS, SPACING, FONT_SIZE, RADIUS } from '@/constants/theme';
 
-// day labels removed — days are selected in programme builder
+// day labels removed — days are selected in program builder
 const EQUIPMENT_OPTIONS = ['Full gym', 'Dumbbells only', 'Barbell + rack', 'Bodyweight only', 'Mixed/home gym'];
 const GOAL_OPTIONS = ['Build strength', 'Build muscle', 'Lose fat', 'Athletic performance', 'General fitness'];
 
@@ -72,7 +72,11 @@ export default function OnboardingScreen() {
       userMode: (userMode as 'guided' | 'self') || 'guided',
     };
     await saveProfile(profile);
-    router.replace('/(tabs)');
+    if (userMode === 'guided') {
+      router.replace('/programme' as any);
+    } else {
+      router.replace('/(tabs)');
+    }
   }
 
   function canAdvance() {
@@ -134,7 +138,7 @@ export default function OnboardingScreen() {
             <View style={styles.stepContainer}>
               <Text style={styles.stepLabel}>Step 2 of {TOTAL_STEPS}</Text>
               <Text style={styles.question}>How long have you been training consistently?</Text>
-              <Text style={styles.subText}>Be honest. It changes your programme.</Text>
+              <Text style={styles.subText}>Be honest. It changes your program.</Text>
               {(
                 [
                   { value: 'beginner', label: 'Beginner', sub: 'Under 12 months consistent training' },
@@ -242,7 +246,7 @@ export default function OnboardingScreen() {
                 [
                   {
                     value: 'guided' as const,
-                    label: 'Build me a programme',
+                    label: 'Build me a program',
                     sub: 'Get a personalised training plan, progressive overload guidance, and full coaching features.',
                   },
                   {
