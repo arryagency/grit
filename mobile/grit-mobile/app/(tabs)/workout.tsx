@@ -1404,105 +1404,111 @@ function LiquidTimer({
 }
 
 function BodySVG({ muscleGroup, progress, backView }: { muscleGroup: string; progress: number; backView: boolean }) {
-  const alpha = 0.08 + progress * 0.42;
+  // Alpha ramps from 0.15 → 0.70 as timer progresses
+  const alpha = 0.15 + progress * 0.55;
   const hl = `rgba(232,255,0,${alpha.toFixed(2)})`;
-  const hlDim = `rgba(232,255,0,${(alpha * 0.6).toFixed(2)})`;
+  const hlDim = `rgba(232,255,0,${(alpha * 0.55).toFixed(2)})`;
 
-  // The full musculature.png has front figure on left half, back figure on right half.
-  // Display the image at 200px wide inside a 100px clipping container.
-  const imageLeft = backView ? -100 : 0;
+  // Image is 1024×768. Displayed at height=160 → width=213 (aspect preserved).
+  // Each half = 107px. Front figure centred at ~x=53, back at ~x=160 in 213px image.
+  // Container is 100px wide with overflow:hidden — offset to show the correct half.
+  const IMG_W = 213;
+  const IMG_H = 160;
+  const imageLeft = backView ? -110 : 0;
 
   const highlights = (() => {
     switch (muscleGroup) {
       case 'chest':
         return (
           <>
-            <Ellipse cx={34} cy={44} rx={13} ry={9} fill={hl} />
-            <Ellipse cx={66} cy={44} rx={13} ry={9} fill={hl} />
+            <Ellipse cx={33} cy={43} rx={14} ry={11} fill={hl} />
+            <Ellipse cx={67} cy={43} rx={14} ry={11} fill={hl} />
           </>
         );
       case 'back':
-        // Lats on back view
         return (
           <>
-            <Ellipse cx={24} cy={58} rx={10} ry={22} fill={hl} />
-            <Ellipse cx={76} cy={58} rx={10} ry={22} fill={hl} />
-            <Ellipse cx={50} cy={36} rx={18} ry={9} fill={hlDim} />
+            {/* Lats */}
+            <Ellipse cx={22} cy={60} rx={12} ry={24} fill={hl} />
+            <Ellipse cx={78} cy={60} rx={12} ry={24} fill={hl} />
+            {/* Traps */}
+            <Ellipse cx={50} cy={35} rx={16} ry={9} fill={hlDim} />
           </>
         );
       case 'glutes':
         return (
           <>
-            <Ellipse cx={32} cy={102} rx={14} ry={13} fill={hl} />
-            <Ellipse cx={68} cy={102} rx={14} ry={13} fill={hl} />
+            <Ellipse cx={32} cy={106} rx={15} ry={14} fill={hl} />
+            <Ellipse cx={68} cy={106} rx={15} ry={14} fill={hl} />
           </>
         );
       case 'shoulders':
         return (
           <>
-            <Ellipse cx={16} cy={40} rx={10} ry={9} fill={hl} />
-            <Ellipse cx={84} cy={40} rx={10} ry={9} fill={hl} />
+            <Ellipse cx={14} cy={36} rx={12} ry={10} fill={hl} />
+            <Ellipse cx={86} cy={36} rx={12} ry={10} fill={hl} />
           </>
         );
       case 'biceps':
         return (
           <>
-            <Ellipse cx={11} cy={62} rx={7} ry={13} fill={hl} />
-            <Ellipse cx={89} cy={62} rx={7} ry={13} fill={hl} />
+            <Ellipse cx={11} cy={60} rx={8} ry={16} fill={hl} />
+            <Ellipse cx={89} cy={60} rx={8} ry={16} fill={hl} />
           </>
         );
       case 'triceps':
-        // Back of arms, visible on back view but also shown on front for simplicity
         return (
           <>
-            <Ellipse cx={11} cy={64} rx={6} ry={13} fill={hl} />
-            <Ellipse cx={89} cy={64} rx={6} ry={13} fill={hl} />
+            <Ellipse cx={10} cy={62} rx={7} ry={15} fill={hl} />
+            <Ellipse cx={90} cy={62} rx={7} ry={15} fill={hl} />
           </>
         );
       case 'legs':
         return (
           <>
-            <Ellipse cx={30} cy={116} rx={12} ry={26} fill={hl} />
-            <Ellipse cx={70} cy={116} rx={12} ry={26} fill={hl} />
+            <Ellipse cx={30} cy={110} rx={13} ry={26} fill={hl} />
+            <Ellipse cx={70} cy={110} rx={13} ry={26} fill={hl} />
           </>
         );
       case 'calves':
         return (
           <>
-            <Ellipse cx={28} cy={150} rx={9} ry={10} fill={hl} />
-            <Ellipse cx={72} cy={150} rx={9} ry={10} fill={hl} />
+            <Ellipse cx={28} cy={144} rx={10} ry={13} fill={hl} />
+            <Ellipse cx={72} cy={144} rx={10} ry={13} fill={hl} />
           </>
         );
       case 'abs':
-        return <SvgRect x={36} y={52} width={28} height={42} rx={4} fill={hl} />;
+        return (
+          <>
+            <SvgRect x={37} y={52} width={26} height={36} rx={5} fill={hl} />
+          </>
+        );
       default:
         return (
           <SvgRect
-            x={8}
-            y={0}
-            width={84}
-            height={160}
-            rx={10}
-            fill={`rgba(232,255,0,${(alpha * 0.2).toFixed(2)})`}
+            x={5}
+            y={5}
+            width={90}
+            height={150}
+            rx={12}
+            fill={`rgba(232,255,0,${(alpha * 0.18).toFixed(2)})`}
           />
         );
     }
   })();
 
   return (
-    <View style={{ width: 100, height: 160, overflow: 'hidden', borderRadius: 8 }}>
-      {/* Anatomy photo — show front (left) or back (right) half */}
+    <View style={{ width: 100, height: IMG_H, overflow: 'hidden', borderRadius: 10 }}>
+      {/* Anatomy photo — correct aspect ratio, crop to front or back half */}
       <Image
         source={require('../../assets/images/musculature.png')}
-        style={{ width: 200, height: 160, position: 'absolute', left: imageLeft }}
+        style={{ width: IMG_W, height: IMG_H, position: 'absolute', left: imageLeft }}
         resizeMode="stretch"
       />
-      {/* Dark overlay for GRIT theme */}
-      <View style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.45)' }} />
-      {/* Subtle yellow-green tint */}
-      <View style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(232,255,0,0.05)' }} />
+      {/* Light dark overlay — image already has black bg, just soften slightly */}
+      <View style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.15)' }} />
       {/* SVG muscle highlight shapes */}
-      <Svg width={100} height={160} viewBox="0 0 100 160" style={{ position: 'absolute' }}>
+      <Svg width={100} height={IMG_H} viewBox="0 0 100 160" style={{ position: 'absolute' }}>
         {highlights}
       </Svg>
     </View>
