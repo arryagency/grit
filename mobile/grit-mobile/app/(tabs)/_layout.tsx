@@ -5,11 +5,11 @@ import { COLORS } from '@/constants/theme';
 
 type IconName = React.ComponentProps<typeof Ionicons>['name'];
 
-function TabIcon({ name, focused }: { name: IconName; focused: boolean }) {
+function TabIcon({ name, focused, size = 22 }: { name: IconName; focused: boolean; size?: number }) {
   return (
     <Ionicons
       name={focused ? name : (`${name}-outline` as IconName)}
-      size={22}
+      size={size}
       color={focused ? COLORS.accent : COLORS.textMuted}
     />
   );
@@ -34,17 +34,17 @@ export default function TabLayout() {
         }}
       />
       <Tabs.Screen
-        name="workout"
-        options={{
-          title: 'Workout',
-          tabBarIcon: ({ focused }) => <TabIcon name="barbell" focused={focused} />,
-        }}
-      />
-      <Tabs.Screen
         name="history"
         options={{
           title: 'History',
           tabBarIcon: ({ focused }) => <TabIcon name="calendar" focused={focused} />,
+        }}
+      />
+      <Tabs.Screen
+        name="workout"
+        options={{
+          title: 'Workout',
+          tabBarIcon: ({ focused }) => <TabIcon name="barbell" focused={focused} size={26} />,
         }}
       />
       <Tabs.Screen

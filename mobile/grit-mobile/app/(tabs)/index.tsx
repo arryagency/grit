@@ -6,6 +6,7 @@ import {
   TouchableOpacity,
   SafeAreaView,
   RefreshControl,
+  Platform,
 } from 'react-native';
 import { useState, useCallback } from 'react';
 import { router, useFocusEffect } from 'expo-router';
@@ -16,18 +17,13 @@ import {
   UserProfile,
   WorkoutSession,
   getStreak,
-  getDaysSinceLastWorkout,
-  getWeeklyVolume,
   formatDate,
-  getBodyWeightEntries,
-  getBodyWeightTrend,
   getSavedProgram,
   SavedProgram,
-  BodyWeightEntry,
   getProgressionSuggestions,
   ProgressionSuggestion,
 } from '@/utils/storage';
-import { getMotivationalLine, getQuoteOfTheDay } from '@/utils/progressiveOverload';
+import { getQuoteOfTheDay } from '@/utils/progressiveOverload';
 import { COLORS, SPACING, FONT_SIZE, RADIUS } from '@/constants/theme';
 
 const DAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
@@ -36,21 +32,18 @@ export default function HomeScreen() {
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [sessions, setSessions] = useState<WorkoutSession[]>([]);
   const [refreshing, setRefreshing] = useState(false);
-  const [bodyWeightEntries, setBodyWeightEntries] = useState<BodyWeightEntry[]>([]);
   const [savedProgram, setSavedProgram] = useState<SavedProgram | null>(null);
   const [progressionSuggestions, setProgressionSuggestions] = useState<ProgressionSuggestion[]>([]);
 
   async function load() {
-    const [p, s, bw, sp, ps] = await Promise.all([
+    const [p, s, sp, ps] = await Promise.all([
       getProfile(),
       getSessions(),
-      getBodyWeightEntries(),
       getSavedProgram(),
       getProgressionSuggestions(),
     ]);
     setProfile(p);
     setSessions(s);
-    setBodyWeightEntries(bw);
     setSavedProgram(sp);
     setProgressionSuggestions(ps);
   }
@@ -68,30 +61,23 @@ export default function HomeScreen() {
   }, []);
 
   const streak = getStreak(sessions, profile?.daysPerWeek ?? 3);
-  const daysSince = getDaysSinceLastWorkout(sessions);
-  const motivationalLine = getMotivationalLine(streak, daysSince);
   const lastSession = sessions[0] ?? null;
-  const weekVol = getWeeklyVolume(sessions);
 
   const today = new Date().getDay();
-  const isTrainingDay = profile?.trainingDays?.includes(today) ?? false;
+  // true=training day, false=rest day, null=no program set
+  const isTrainingDay: boolean | null = (() => {
+    if (savedProgram?.program?.trainingDayIndices?.length) {
+      return savedProgram.program.trainingDayIndices.includes(today);
+    }
+    if (profile?.trainingDays?.length) {
+      return profile.trainingDays.includes(today);
+    }
+    return null;
+  })();
 
-  // Body weight
-  const currentWeight = bodyWeightEntries.length > 0 ? bodyWeightEntries[0].weight : null;
-  const bwTrend = getBodyWeightTrend(bodyWeightEntries);
-  const sortedBW = [...bodyWeightEntries].sort(
-    (a, b) => new Date(a.date).getTime() - new Date(b.date).getTime()
-  );
-  const startWeight = sortedBW.length > 0 ? sortedBW[0].weight : null;
-  const weightChange =
-    currentWeight && startWeight ? currentWeight - startWeight : null;
 
   const isGuidedMode = !profile?.userMode || profile.userMode === 'guided';
 
-  function formatVol(v: number) {
-    if (v === 0) return '—';
-    return v >= 1000 ? `${(v / 1000).toFixed(1)}t` : `${Math.round(v)}kg`;
-  }
 
   return (
     <SafeAreaView style={styles.container}>
@@ -115,22 +101,16 @@ export default function HomeScreen() {
               <Text style={styles.streakLabel}>streak</Text>
             </View>
             <TouchableOpacity onPress={() => router.push('/settings' as any)} hitSlop={12}>
-              <Ionicons name="settings-outline" size={20} color={COLORS.textMuted} />
+              <Ionicons name="menu" size={24} color={COLORS.textMuted} />
             </TouchableOpacity>
           </View>
         </View>
 
         {/* Daily quote */}
         <View style={styles.motivationCard}>
+          <Text style={styles.motivationQuoteMark}>{'\u201C'}</Text>
           <Text style={styles.motivationText}>{getQuoteOfTheDay()}</Text>
         </View>
-
-        {/* Contextual status line */}
-        {sessions.length > 0 && daysSince < 999 && (
-          <View style={styles.contextLine}>
-            <Text style={styles.contextLineText}>{motivationalLine}</Text>
-          </View>
-        )}
 
         {/* Progressive overload suggestion cards */}
         {progressionSuggestions.length > 0 && (
@@ -159,73 +139,26 @@ export default function HomeScreen() {
               <Text style={styles.todayDayLabel}>
                 {DAY_LABELS[today]}, {new Date().toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}
               </Text>
-              {isTrainingDay ? (
+              {isTrainingDay === true ? (
                 <Text style={styles.todayStatus}>Training day</Text>
-              ) : (
+              ) : isTrainingDay === false ? (
                 <Text style={[styles.todayStatus, { color: COLORS.textSecondary }]}>Rest day</Text>
+              ) : (
+                <Text style={[styles.todayStatus, { color: COLORS.textMuted }]}>No program set</Text>
               )}
             </View>
             <TouchableOpacity
-              style={[styles.startButton, !isTrainingDay && styles.startButtonAlt]}
+              style={[styles.startButton, isTrainingDay !== true && styles.startButtonAlt]}
               onPress={() => router.push('/(tabs)/workout')}
             >
-              <Ionicons name="barbell" size={16} color={isTrainingDay ? COLORS.background : COLORS.accent} />
-              <Text style={[styles.startButtonText, !isTrainingDay && styles.startButtonTextAlt]}>
-                {isTrainingDay ? 'Start' : 'Log anyway'}
+              <Ionicons name="barbell" size={16} color={isTrainingDay === true ? COLORS.background : COLORS.accent} />
+              <Text style={[styles.startButtonText, isTrainingDay !== true && styles.startButtonTextAlt]}>
+                {isTrainingDay === true ? 'Start' : 'Log session'}
               </Text>
             </TouchableOpacity>
           </View>
         </View>
 
-        {/* Body weight widget */}
-        <View style={styles.section}>
-          <Text style={styles.sectionLabel}>Body weight</Text>
-          <TouchableOpacity
-            style={styles.bwWidget}
-            onPress={() => router.push('/(tabs)/progress')}
-            activeOpacity={0.7}
-          >
-            <View style={styles.bwWidgetIcon}>
-              <Ionicons name="scale-outline" size={20} color={COLORS.accent} />
-            </View>
-            {currentWeight ? (
-              <>
-                <View style={styles.bwWidgetLeft}>
-                  <View style={styles.bwValueRow}>
-                    <Text style={styles.bwWeightValue}>{currentWeight}</Text>
-                    <Text style={styles.bwWeightUnit}>kg</Text>
-                    <View style={styles.bwLoggedDot} />
-                  </View>
-                  {weightChange !== null && Math.abs(weightChange) >= 0.1 && (
-                    <Text style={[styles.bwChange, { color: weightChange > 0 ? COLORS.success : COLORS.warning }]}>
-                      {weightChange > 0 ? '+' : ''}{weightChange.toFixed(1)}kg since start
-                    </Text>
-                  )}
-                </View>
-                <View style={styles.bwWidgetRight}>
-                  {bwTrend && (
-                    <View style={styles.bwTrendBadge}>
-                      <Ionicons
-                        name={bwTrend === 'gaining' ? 'trending-up' : bwTrend === 'losing' ? 'trending-down' : 'remove'}
-                        size={12}
-                        color={bwTrend === 'gaining' ? COLORS.success : bwTrend === 'losing' ? COLORS.warning : COLORS.textSecondary}
-                      />
-                      <Text style={styles.bwTrendText}>
-                        {bwTrend === 'gaining' ? 'Gaining' : bwTrend === 'losing' ? 'Losing' : 'Maintaining'}
-                      </Text>
-                    </View>
-                  )}
-                  <Text style={styles.bwSeeMore}>Log weight →</Text>
-                </View>
-              </>
-            ) : (
-              <View style={styles.bwWidgetEmpty}>
-                <Text style={styles.bwEmptyText}>Tap to log today's weight</Text>
-                <Ionicons name="add-circle-outline" size={18} color={COLORS.accent} />
-              </View>
-            )}
-          </TouchableOpacity>
-        </View>
 
         {/* Saved program card — guided mode only */}
         {isGuidedMode && savedProgram && (
@@ -280,23 +213,6 @@ export default function HomeScreen() {
           </TouchableOpacity>
         </View>
 
-        {/* Stats row */}
-        <View style={styles.statsRow}>
-          <View style={styles.statCard}>
-            <Text style={styles.statValue}>{sessions.length}</Text>
-            <Text style={styles.statLabel}>Sessions</Text>
-          </View>
-          <View style={styles.statCard}>
-            <Text style={styles.statValue}>{streak}</Text>
-            <Text style={styles.statLabel}>Streak</Text>
-          </View>
-          <View style={styles.statCard}>
-            <Text style={[styles.statValue, weekVol.current > 0 && weekVol.current >= weekVol.best && { color: COLORS.accent }]}>
-              {formatVol(weekVol.current)}
-            </Text>
-            <Text style={styles.statLabel}>This week</Text>
-          </View>
-        </View>
 
         {/* Last session */}
         {lastSession && (
@@ -338,17 +254,6 @@ export default function HomeScreen() {
           </View>
         )}
 
-        {/* Empty state */}
-        {sessions.length === 0 && (
-          <View style={styles.section}>
-            <View style={styles.emptyState}>
-              <Text style={styles.emptyText}>Your history starts today.</Text>
-              <Text style={styles.emptySubText}>
-                Every elite lifter started at session 1. Tap Workout to log yours.
-              </Text>
-            </View>
-          </View>
-        )}
 
         <View style={{ height: SPACING.xxl }} />
       </ScrollView>
@@ -413,25 +318,32 @@ const styles = StyleSheet.create({
   motivationCard: {
     marginHorizontal: SPACING.xl,
     marginBottom: SPACING.xl,
-    paddingVertical: SPACING.md,
-    borderLeftWidth: 3,
-    borderLeftColor: COLORS.accent,
-    paddingLeft: SPACING.md,
+    backgroundColor: '#1a1a1a',
+    borderWidth: 1,
+    borderColor: 'rgba(232,255,0,0.25)',
+    borderRadius: 16,
+    paddingHorizontal: 16,
+    paddingTop: 12,
+    paddingBottom: 12,
+    shadowColor: 'rgba(232,255,0,1)',
+    shadowOpacity: 0.08,
+    shadowRadius: 20,
+    shadowOffset: { width: 0, height: 0 },
+    elevation: 4,
+  },
+  motivationQuoteMark: {
+    fontSize: 32,
+    fontFamily: Platform.OS === 'ios' ? 'Georgia' : 'serif',
+    color: '#e8ff00',
+    lineHeight: 28,
+    marginBottom: 0,
   },
   motivationText: {
-    fontSize: FONT_SIZE.md,
-    color: COLORS.text,
+    fontSize: 13,
+    color: '#f0f0f0',
     fontStyle: 'italic',
-    lineHeight: 22,
-  },
-  contextLine: {
-    marginHorizontal: SPACING.xl,
-    marginTop: -SPACING.lg,
-    marginBottom: SPACING.xl,
-  },
-  contextLineText: {
-    fontSize: FONT_SIZE.sm,
-    color: COLORS.textMuted,
+    lineHeight: 20,
+    textAlign: 'center',
   },
   section: {
     marginHorizontal: SPACING.xl,
@@ -596,30 +508,6 @@ const styles = StyleSheet.create({
     backgroundColor: COLORS.accent,
     alignItems: 'center',
     justifyContent: 'center',
-  },
-  // Stats row
-  statsRow: {
-    flexDirection: 'row',
-    marginHorizontal: SPACING.xl,
-    gap: SPACING.md,
-    marginBottom: SPACING.xl,
-  },
-  statCard: {
-    flex: 1,
-    backgroundColor: COLORS.surface,
-    borderRadius: RADIUS.md,
-    borderWidth: 1,
-    borderColor: COLORS.border,
-    padding: SPACING.md,
-    alignItems: 'center',
-  },
-  statValue: { fontSize: FONT_SIZE.xl, fontWeight: '900', color: COLORS.text },
-  statLabel: {
-    fontSize: FONT_SIZE.xs,
-    color: COLORS.textMuted,
-    marginTop: 2,
-    textTransform: 'uppercase',
-    letterSpacing: 0.5,
   },
   // Session card
   sessionCard: {

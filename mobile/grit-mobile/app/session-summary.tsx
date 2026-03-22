@@ -31,12 +31,19 @@ export default function SessionSummaryScreen() {
   const [showSaveTemplate, setShowSaveTemplate] = useState(false);
   const [templateName, setTemplateName] = useState('');
   const [templateSaved, setTemplateSaved] = useState(false);
+  const [prevSession, setPrevSession] = useState<WorkoutSession | null>(null);
 
   useEffect(() => {
     getSessions().then((sessions) => {
       const found = sessions.find((s) => s.id === sessionId) ?? null;
       setSession(found);
       setWeekVolume(getWeeklyVolume(sessions));
+      if (found) {
+        const prev = sessions.find(
+          (s) => s.id !== sessionId && new Date(s.date) < new Date(found.date)
+        ) ?? null;
+        setPrevSession(prev);
+      }
     });
   }, [sessionId]);
 
@@ -52,11 +59,11 @@ export default function SessionSummaryScreen() {
 
   const newPRsCount = parseInt(prs ?? '0', 10);
   const completedSets = session.exercises.reduce(
-    (t, ex) => t + ex.sets.filter((s) => s.completed).length, 0
+    (t, ex) => t + ex.sets.filter((s) => s.weight > 0 || s.reps > 0).length, 0
   );
   const totalVolume = session.exercises.reduce(
     (t, ex) => t + ex.sets.reduce((s, set) =>
-      s + (set.completed && set.weight > 0 ? set.weight * set.reps : 0), 0), 0
+      s + (set.weight > 0 && set.reps > 0 ? set.weight * set.reps : 0), 0), 0
   );
   const comment = getSessionComment(
     session.exercises.length,
@@ -65,6 +72,27 @@ export default function SessionSummaryScreen() {
     session.duration,
     newPRsCount
   );
+
+  function getComparisonComment(current: WorkoutSession, prev: WorkoutSession | null): string | null {
+    if (!prev) return null;
+    const sumReps = (s: WorkoutSession) =>
+      s.exercises.reduce((t, ex) => t + ex.sets.filter((set) => set.reps > 0).reduce((n, set) => n + set.reps, 0), 0);
+    const avgWeight = (s: WorkoutSession) => {
+      const done = s.exercises.flatMap((ex) => ex.sets.filter((set) => set.weight > 0));
+      return done.length > 0 ? done.reduce((t, set) => t + set.weight, 0) / done.length : 0;
+    };
+    const curReps = sumReps(current);
+    const prevReps = sumReps(prev);
+    const curWeight = avgWeight(current);
+    const prevWeight = avgWeight(prev);
+    if (curWeight > prevWeight + 0.5) return "Heavier than last session. Progressive overload working. Good.";
+    if (curWeight < prevWeight - 0.5) return "Lighter than last session. What happened? Get back on track next time.";
+    if (curReps > prevReps) return "More reps than last session. Strength is building. Keep pushing.";
+    if (curReps < prevReps) return "Fewer reps than last session. Bad session or bad sleep? Either way, show up again.";
+    return null;
+  }
+
+  const comparisonComment = newPRsCount === 0 ? getComparisonComment(session, prevSession) : null;
 
   const weeklyPR = weekVolume.current > 0 && weekVolume.current >= weekVolume.best;
 
@@ -169,7 +197,7 @@ export default function SessionSummaryScreen() {
 
         {/* GRIT comment */}
         <View style={styles.commentCard}>
-          <Text style={styles.commentText}>{comment}</Text>
+          <Text style={styles.commentText}>{comparisonComment ?? comment}</Text>
         </View>
 
         {/* Stats row */}

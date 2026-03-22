@@ -232,10 +232,6 @@ export default function ProgressScreen() {
             <Text style={styles.statValue}>{streak}</Text>
             <Text style={styles.statLabel}>Streak</Text>
           </View>
-          <View style={styles.statCard}>
-            <Text style={styles.statValue}>{prEntries.length}</Text>
-            <Text style={styles.statLabel}>PRs set</Text>
-          </View>
         </View>
 
         {/* Body weight */}

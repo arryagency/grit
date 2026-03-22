@@ -584,16 +584,9 @@ function selectTemplate(days: TrainingDays, exp: Experience): TemplateResult {
     };
   }
   if (days === 5) {
-    if (beginner) {
-      return {
-        sessions: [BEG_UA, BEG_LA, BEG_FB_A, BEG_UB, BEG_LB],
-        split: 'Upper/Lower + Full Body',
-        trainingDayIndices: [1, 2, 3, 4, 5],
-      };
-    }
     return {
       sessions: [INT_PUSH, INT_PULL, INT_LEGS_5, INT_UPPER_5, INT_LOWER_5],
-      split: 'PPL + Upper/Lower Hybrid',
+      split: 'PPL + Upper/Lower',
       trainingDayIndices: [1, 2, 3, 4, 5],
     };
   }

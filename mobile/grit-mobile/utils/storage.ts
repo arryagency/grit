@@ -94,6 +94,14 @@ export interface NotificationSettings {
   customReminder: boolean;        // default false
   customReminderText: string;
   customReminderTime: string;     // "HH:MM"
+  gymFocusMode: boolean;          // default false — random distraction reminder during sessions
+}
+
+export interface CustomReminderItem {
+  id: string;
+  text: string;
+  time: string;   // "HH:MM"
+  enabled: boolean;
 }
 
 export interface ProgressionSuggestion {
@@ -132,6 +140,8 @@ const KEYS = {
   PROGRAM_PREFS: '@grit/programPrefs',
   NOTIFICATION_SETTINGS: '@grit/notificationSettings',
   PROGRESSION_SUGGESTIONS: '@grit/progressionSuggestions',
+  CUSTOM_REMINDERS: '@grit/customReminders',
+  REST_TIMES: '@grit/restTimes',
 };
 
 // ─── Profile ─────────────────────────────────────────────────────────────────
@@ -572,6 +582,7 @@ const DEFAULT_NOTIFICATION_SETTINGS: NotificationSettings = {
   customReminder: false,
   customReminderText: '',
   customReminderTime: '09:00',
+  gymFocusMode: false,
 };
 
 export async function getNotificationSettings(): Promise<NotificationSettings> {
@@ -618,4 +629,36 @@ export async function clearProgressionSuggestion(exercise: string): Promise<void
     (s) => s.exercise.toLowerCase() !== exercise.toLowerCase()
   );
   await AsyncStorage.setItem(KEYS.PROGRESSION_SUGGESTIONS, JSON.stringify(updated));
+}
+
+// ─── Custom Reminders ─────────────────────────────────────────────────────────
+
+export async function getCustomReminders(): Promise<CustomReminderItem[]> {
+  try {
+    const data = await AsyncStorage.getItem(KEYS.CUSTOM_REMINDERS);
+    return data ? JSON.parse(data) : [];
+  } catch {
+    return [];
+  }
+}
+
+export async function saveCustomReminders(reminders: CustomReminderItem[]): Promise<void> {
+  await AsyncStorage.setItem(KEYS.CUSTOM_REMINDERS, JSON.stringify(reminders));
+}
+
+// ─── Per-exercise Rest Times ──────────────────────────────────────────────────
+
+export async function getRestTimes(): Promise<Record<string, number>> {
+  try {
+    const data = await AsyncStorage.getItem(KEYS.REST_TIMES);
+    return data ? JSON.parse(data) : {};
+  } catch {
+    return {};
+  }
+}
+
+export async function saveRestTime(exerciseName: string, seconds: number): Promise<void> {
+  const times = await getRestTimes();
+  times[exerciseName.toLowerCase()] = seconds;
+  await AsyncStorage.setItem(KEYS.REST_TIMES, JSON.stringify(times));
 }

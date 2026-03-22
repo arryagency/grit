@@ -60,9 +60,7 @@ export default function WorkoutDetailScreen() {
     setSaving(true);
     try {
       await saveSession(draft);
-      setSession(draft);
-      setEditMode(false);
-      setDraft(null);
+      router.replace('/(tabs)/');
     } finally {
       setSaving(false);
     }
@@ -164,6 +162,17 @@ export default function WorkoutDetailScreen() {
   return (
     <SafeAreaView style={styles.container}>
       <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+        {/* Header with back button */}
+        {!editMode && (
+          <View style={styles.screenHeader}>
+            <TouchableOpacity onPress={() => router.replace('/(tabs)/')} hitSlop={12} style={styles.backBtn}>
+              <Ionicons name="chevron-back" size={24} color={COLORS.text} />
+            </TouchableOpacity>
+            <Text style={styles.screenHeaderTitle}>Session</Text>
+            <View style={{ width: 40 }} />
+          </View>
+        )}
+
         {/* Edit mode toolbar */}
         {editMode && (
           <View style={styles.editToolbar}>
@@ -176,7 +185,7 @@ export default function WorkoutDetailScreen() {
               onPress={saveEdit}
               disabled={saving}
             >
-              <Text style={styles.saveBtnText}>{saving ? 'Saving…' : 'Save'}</Text>
+              <Text style={styles.saveBtnText}>{saving ? 'Saving…' : 'Done'}</Text>
             </TouchableOpacity>
           </View>
         )}
@@ -416,6 +425,18 @@ const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: COLORS.background },
   empty: { flex: 1, alignItems: 'center', justifyContent: 'center' },
   emptyText: { color: COLORS.textSecondary, fontSize: FONT_SIZE.lg },
+
+  screenHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: SPACING.lg,
+    paddingVertical: SPACING.md,
+    borderBottomWidth: 1,
+    borderBottomColor: COLORS.border,
+  },
+  screenHeaderTitle: { fontSize: FONT_SIZE.lg, fontWeight: '800', color: COLORS.text },
+  backBtn: { width: 40, alignItems: 'flex-start' },
 
   // Edit toolbar
   editToolbar: {

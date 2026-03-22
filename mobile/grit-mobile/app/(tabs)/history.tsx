@@ -108,7 +108,7 @@ export default function HistoryScreen() {
 function sessionVolume(session: WorkoutSession): number {
   return session.exercises.reduce((t, ex) =>
     t + ex.sets.reduce((s, set) =>
-      s + (set.completed && set.weight > 0 ? set.weight * set.reps : 0), 0), 0);
+      s + (set.weight > 0 && set.reps > 0 ? set.weight * set.reps : 0), 0), 0);
 }
 
 function formatVolume(vol: number): string {
@@ -124,7 +124,7 @@ function SessionCard({
   onPress: () => void;
 }) {
   const topExercises = session.exercises.slice(0, 4);
-  const totalSets = session.exercises.reduce((acc, ex) => acc + ex.sets.filter((s) => s.completed).length, 0);
+  const totalSets = session.exercises.reduce((acc, ex) => acc + ex.sets.filter((s) => s.weight > 0 || s.reps > 0).length, 0);
   const vol = sessionVolume(session);
   const hasPR = session.exercises.some((ex) => ex.sets.some((s) => s.isPR));
 

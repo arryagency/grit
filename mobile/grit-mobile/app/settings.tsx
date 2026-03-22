@@ -17,6 +17,10 @@ import {
   getNotificationSettings,
   saveNotificationSettings,
   NotificationSettings,
+  getCustomReminders,
+  saveCustomReminders,
+  CustomReminderItem,
+  generateId,
 } from '@/utils/storage';
 import { COLORS, SPACING, FONT_SIZE, RADIUS } from '@/constants/theme';
 
@@ -151,11 +155,17 @@ export default function SettingsScreen() {
     customReminder: false,
     customReminderText: '',
     customReminderTime: '09:00',
+    gymFocusMode: false,
   });
+
+  const [customReminders, setCustomReminders] = useState<CustomReminderItem[]>([]);
+  const [openPickerId, setOpenPickerId] = useState<string | null>(null);
+  const [showCreatinePicker, setShowCreatinePicker] = useState(false);
 
   useFocusEffect(
     useCallback(() => {
-      getNotificationSettings().then(setSettings);
+      getNotificationSettings().then((s) => setSettings(s));
+      getCustomReminders().then((r) => setCustomReminders(r));
     }, [])
   );
 
@@ -163,6 +173,32 @@ export default function SettingsScreen() {
     const updated = { ...settings, [key]: value };
     setSettings(updated);
     await saveNotificationSettings({ [key]: value });
+  }
+
+  async function addReminder() {
+    if (customReminders.length >= 5) return;
+    const item: CustomReminderItem = {
+      id: generateId(),
+      text: '',
+      time: '09:00',
+      enabled: true,
+    };
+    const updated = [...customReminders, item];
+    setCustomReminders(updated);
+    await saveCustomReminders(updated);
+  }
+
+  async function updateReminder(id: string, patch: Partial<CustomReminderItem>) {
+    const updated = customReminders.map((r) => (r.id === id ? { ...r, ...patch } : r));
+    setCustomReminders(updated);
+    await saveCustomReminders(updated);
+  }
+
+  async function deleteReminder(id: string) {
+    const updated = customReminders.filter((r) => r.id !== id);
+    setCustomReminders(updated);
+    await saveCustomReminders(updated);
+    if (openPickerId === id) setOpenPickerId(null);
   }
 
   function confirmReset() {
@@ -230,6 +266,7 @@ export default function SettingsScreen() {
         {/* Custom reminders */}
         <Text style={styles.sectionLabel}>Custom Reminders</Text>
         <View style={styles.card}>
+          {/* Creatine — fixed */}
           <ToggleRow
             label="Creatine reminder"
             description={`Daily reminder at ${settings.creatineReminderTime}`}
@@ -239,52 +276,118 @@ export default function SettingsScreen() {
           {settings.creatineReminder && (
             <View style={styles.inlineInputs}>
               <Text style={styles.inlineLabel}>Time</Text>
-              <SettingsTimePicker
-                value={settings.creatineReminderTime}
-                onChange={(t) => {
-                  const updated = { ...settings, creatineReminderTime: t };
-                  setSettings(updated);
-                  saveNotificationSettings({ creatineReminderTime: t });
-                }}
-              />
+              {!showCreatinePicker ? (
+                <TouchableOpacity
+                  style={styles.timeDisplayBtn}
+                  onPress={() => setShowCreatinePicker(true)}
+                >
+                  <Text style={styles.timeDisplayText}>
+                    {TIME_OPTIONS.find((t) => t.value === settings.creatineReminderTime)?.label ?? settings.creatineReminderTime}
+                  </Text>
+                  <Ionicons name="chevron-down" size={14} color={COLORS.textMuted} />
+                </TouchableOpacity>
+              ) : (
+                <>
+                  <SettingsTimePicker
+                    value={settings.creatineReminderTime}
+                    onChange={(t) => {
+                      const updated = { ...settings, creatineReminderTime: t };
+                      setSettings(updated);
+                      saveNotificationSettings({ creatineReminderTime: t });
+                    }}
+                  />
+                  <TouchableOpacity
+                    style={styles.confirmPickerBtn}
+                    onPress={() => setShowCreatinePicker(false)}
+                  >
+                    <Text style={styles.confirmPickerBtnText}>Confirm</Text>
+                  </TouchableOpacity>
+                </>
+              )}
             </View>
           )}
-          <Divider />
+
+          {/* Dynamic reminder list */}
+          {customReminders.map((reminder, idx) => (
+            <View key={reminder.id}>
+              <Divider />
+              <View style={styles.customReminderRow}>
+                <Switch
+                  value={reminder.enabled}
+                  onValueChange={(v) => updateReminder(reminder.id, { enabled: v })}
+                  trackColor={{ false: COLORS.border, true: COLORS.accent + '80' }}
+                  thumbColor={reminder.enabled ? COLORS.accent : COLORS.textMuted}
+                  ios_backgroundColor={COLORS.border}
+                />
+                <View style={{ flex: 1 }}>
+                  <TextInput
+                    style={styles.reminderTextInput}
+                    value={reminder.text}
+                    onChangeText={(text) => updateReminder(reminder.id, { text })}
+                    placeholder={`Reminder ${idx + 1}`}
+                    placeholderTextColor={COLORS.textMuted}
+                    returnKeyType="done"
+                  />
+                  <TouchableOpacity
+                    style={[styles.timeDisplayBtn, { marginTop: 6 }]}
+                    onPress={() => setOpenPickerId(openPickerId === reminder.id ? null : reminder.id)}
+                  >
+                    <Text style={styles.timeDisplayText}>
+                      {TIME_OPTIONS.find((t) => t.value === reminder.time)?.label ?? reminder.time}
+                    </Text>
+                    <Ionicons
+                      name={openPickerId === reminder.id ? 'chevron-up' : 'chevron-down'}
+                      size={14}
+                      color={COLORS.textMuted}
+                    />
+                  </TouchableOpacity>
+                  {openPickerId === reminder.id && (
+                    <>
+                      <SettingsTimePicker
+                        value={reminder.time}
+                        onChange={(t) => updateReminder(reminder.id, { time: t })}
+                      />
+                      <TouchableOpacity
+                        style={styles.confirmPickerBtn}
+                        onPress={() => setOpenPickerId(null)}
+                      >
+                        <Text style={styles.confirmPickerBtnText}>Confirm</Text>
+                      </TouchableOpacity>
+                    </>
+                  )}
+                </View>
+                <TouchableOpacity
+                  onPress={() => deleteReminder(reminder.id)}
+                  hitSlop={8}
+                  style={{ padding: 4 }}
+                >
+                  <Ionicons name="trash-outline" size={18} color={COLORS.danger} />
+                </TouchableOpacity>
+              </View>
+            </View>
+          ))}
+
+          {/* Add reminder button */}
+          {customReminders.length < 5 && (
+            <>
+              {customReminders.length > 0 && <Divider />}
+              <TouchableOpacity style={styles.addReminderBtn} onPress={addReminder}>
+                <Ionicons name="add" size={18} color={COLORS.background} />
+                <Text style={styles.addReminderBtnText}>Add reminder</Text>
+              </TouchableOpacity>
+            </>
+          )}
+        </View>
+
+        {/* Gym focus mode */}
+        <Text style={styles.sectionLabel}>Session</Text>
+        <View style={styles.card}>
           <ToggleRow
-            label="Custom reminder"
-            description={
-              settings.customReminderText
-                ? `"${settings.customReminderText}" at ${settings.customReminderTime}`
-                : 'Set your own daily reminder'
-            }
-            value={settings.customReminder}
-            onToggle={(v) => toggle('customReminder', v)}
+            label="Gym focus mode 🔒"
+            description="Random reminders to stay locked in during your session"
+            value={settings.gymFocusMode ?? false}
+            onToggle={(v) => toggle('gymFocusMode', v)}
           />
-          {settings.customReminder && (
-            <View style={styles.inlineInputs}>
-              <TextInput
-                style={styles.reminderTextInput}
-                value={settings.customReminderText}
-                onChangeText={(text) => {
-                  const updated = { ...settings, customReminderText: text };
-                  setSettings(updated);
-                  saveNotificationSettings({ customReminderText: text });
-                }}
-                placeholder="e.g. Take your supplements"
-                placeholderTextColor={COLORS.textMuted}
-                returnKeyType="done"
-              />
-              <Text style={styles.inlineLabel}>Time</Text>
-              <SettingsTimePicker
-                value={settings.customReminderTime}
-                onChange={(t) => {
-                  const updated = { ...settings, customReminderTime: t };
-                  setSettings(updated);
-                  saveNotificationSettings({ customReminderTime: t });
-                }}
-              />
-            </View>
-          )}
         </View>
 
         {/* Danger zone */}
@@ -474,5 +577,56 @@ const styles = StyleSheet.create({
     textTransform: 'uppercase',
     letterSpacing: 0.8,
     marginTop: SPACING.xs,
+  },
+  customReminderRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    paddingHorizontal: SPACING.lg,
+    paddingVertical: SPACING.md,
+    gap: SPACING.md,
+  },
+  addReminderBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: COLORS.accent,
+    margin: SPACING.md,
+    borderRadius: RADIUS.sm,
+    paddingVertical: SPACING.sm,
+    gap: SPACING.xs,
+  },
+  addReminderBtnText: {
+    fontSize: FONT_SIZE.sm,
+    fontWeight: '800',
+    color: COLORS.background,
+  },
+  timeDisplayBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: SPACING.sm,
+    backgroundColor: COLORS.surfaceAlt,
+    borderRadius: RADIUS.sm,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    paddingHorizontal: SPACING.md,
+    paddingVertical: SPACING.sm,
+    alignSelf: 'flex-start',
+  },
+  timeDisplayText: {
+    fontSize: FONT_SIZE.sm,
+    fontWeight: '700',
+    color: COLORS.text,
+  },
+  confirmPickerBtn: {
+    backgroundColor: COLORS.accent,
+    borderRadius: RADIUS.sm,
+    paddingVertical: SPACING.sm,
+    alignItems: 'center',
+    marginTop: SPACING.sm,
+  },
+  confirmPickerBtnText: {
+    fontSize: FONT_SIZE.sm,
+    fontWeight: '800',
+    color: COLORS.background,
   },
 });

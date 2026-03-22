@@ -12,11 +12,10 @@ import {
   KeyboardAvoidingView,
   Platform,
   Animated,
-  Easing,
   Linking,
-  Share,
   PanResponder,
 } from 'react-native';
+import Svg, { Path, Circle, Rect as SvgRect, Ellipse } from 'react-native-svg';
 import { useState, useCallback, useRef, useEffect } from 'react';
 import { useFocusEffect, router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
@@ -27,7 +26,6 @@ import {
   saveSession,
   updatePRs,
   WorkoutSession,
-  ExerciseLog,
   SetLog,
   generateId,
   getLastSessionForExercise,
@@ -42,6 +40,9 @@ import {
   saveProgressionSuggestions,
   clearProgressionSuggestion,
   ProgressionSuggestion,
+  getNotificationSettings,
+  getRestTimes,
+  saveRestTime,
 } from '@/utils/storage';
 import { getSuggestion, parseQuickLog, getMissingPieceQuestion } from '@/utils/progressiveOverload';
 import { parseLogWithClaude } from '@/utils/api';
@@ -58,6 +59,29 @@ const QUICK_PLACEHOLDERS = [
   'dl 120 5',
   'i did bench 50kg for 6 reps',
 ];
+
+const GYM_FOCUS_MESSAGES = [
+  "Bro. She's not looking. Get back to work.",
+  "Stop staring. Focus on the bar, not the cardio section.",
+  "The only thing you should be checking out right now is your form.",
+  "She's not impressed by you watching her. She's impressed by results. Keep going.",
+  "Eyes forward. The mirror is for checking form, not for being weird.",
+];
+
+// ─── Unilateral detection ─────────────────────────────────────────────────────
+
+const UNILATERAL_KEYWORDS = [
+  'one arm', 'one-arm', 'single arm', 'single-arm',
+  'single leg', 'single-leg', 'one leg', 'one-leg',
+  'unilateral', 'bulgarian split', 'split squat',
+  'lunge', 'hammer curl', 'concentration curl',
+  'single arm cable',
+];
+
+function isUnilateral(name: string): boolean {
+  const lower = name.toLowerCase();
+  return UNILATERAL_KEYWORDS.some((kw) => lower.includes(kw));
+}
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -83,6 +107,7 @@ export default function WorkoutScreen() {
   const [quickText, setQuickText] = useState('');
   const [quickError, setQuickError] = useState('');
   const [quickParsing, setQuickParsing] = useState(false);
+  const [showQuickPanel, setShowQuickPanel] = useState(false);
   // Track last-logged exercise so we can show a running set list
   const [lastLoggedExercise, setLastLoggedExercise] = useState<string | null>(null);
   // Per-exercise memory: last logged weight/reps for context-aware parsing
@@ -91,14 +116,41 @@ export default function WorkoutScreen() {
   // Rotating placeholder text
   const [placeholderIdx, setPlaceholderIdx] = useState(0);
 
-  // Session timer
+  // Session timer — unified (countup or countdown)
+  const [sessionMode, setSessionMode] = useState<'countup' | 'countdown'>('countup');
   const [sessionTimerMins, setSessionTimerMins] = useState<number | null>(null);
   const [sessionTimerSecs, setSessionTimerSecs] = useState(0);
   const [sessionTimerActive, setSessionTimerActive] = useState(false);
   const [showTimerPicker, setShowTimerPicker] = useState(false);
-  const [customTimerInput, setCustomTimerInput] = useState('');
   const sessionTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const sessionFiveNotified = useRef(false);
+  // Sheet picker local selection (not yet confirmed)
+  const [pickerMins, setPickerMins] = useState(45);
+  // Pref persisted across sessions
+  const lastTimerPrefRef = useRef<{ mode: 'countup' | 'countdown'; targetMins: number | null }>({ mode: 'countup', targetMins: null });
+
+  // Elapsed session timer (always counts up while workout is active)
+  const [elapsedSecs, setElapsedSecs] = useState(0);
+  const elapsedIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+
+  // Per-exercise rest times
+  const [restTimes, setRestTimes] = useState<Record<string, number>>({});
+  const [currentRestExercise, setCurrentRestExercise] = useState<string | null>(null);
+  const [showRestSheet, setShowRestSheet] = useState(false);
+  const [restSheetDuration, setRestSheetDuration] = useState(180);
+
+  // Per-side (unilateral) exercise tracking
+  const [perSideExercises, setPerSideExercises] = useState<Record<string, boolean>>({});
+
+  function getIsPerSide(exName: string): boolean {
+    return perSideExercises[exName] ?? isUnilateral(exName);
+  }
+
+  function togglePerSide(exName: string) {
+    const current = getIsPerSide(exName);
+    setPerSideExercises((prev) => ({ ...prev, [exName]: !current }));
+  }
 
   // Drag-to-reorder state
   const [dragFromIdx, setDragFromIdx] = useState<number | null>(null);
@@ -109,12 +161,7 @@ export default function WorkoutScreen() {
   const dragY = useRef(new Animated.Value(0)).current;
   const dragPanActive = useRef(false); // true once PanResponder takes over the touch
 
-  // Reorder hint toast
-  const [reorderHintVisible, setReorderHintVisible] = useState(false);
-  const reorderHintTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Volume tooltip (shown once, then comparison mode)
-  const [hasSeenVolume, setHasSeenVolume] = useState(false);
 
 
   // PR celebration
@@ -127,7 +174,8 @@ export default function WorkoutScreen() {
   const [restRemaining, setRestRemaining] = useState(180);
   const [restTimerDefault, setRestTimerDefault] = useState(180);
   const restIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const restCompleteScale = useRef(new Animated.Value(1)).current;
+  const restTimerStartVal = useRef(180);
+  const [restTimerComplete, setRestTimerComplete] = useState(false);
 
   useEffect(() => {
     sessionRef.current = session;
@@ -138,27 +186,59 @@ export default function WorkoutScreen() {
       setRestTimerDefault(s.restTimerDefault);
       setRestRemaining(s.restTimerDefault);
     });
-    AsyncStorage.getItem('@grit/hasSeenVolumeTooltip').then((v) => {
-      if (v === 'true') setHasSeenVolume(true);
+    getRestTimes().then(setRestTimes);
+    AsyncStorage.getItem('@grit/sessionTimerPref').then((raw) => {
+      if (raw) {
+        try {
+          const pref = JSON.parse(raw);
+          lastTimerPrefRef.current = pref;
+          setSessionMode(pref.mode ?? 'countup');
+        } catch (_) {}
+      }
     });
     return () => {
       if (restIntervalRef.current) clearInterval(restIntervalRef.current);
       if (sessionTimerRef.current) clearInterval(sessionTimerRef.current);
-      if (reorderHintTimer.current) clearTimeout(reorderHintTimer.current);
+      if (elapsedIntervalRef.current) clearInterval(elapsedIntervalRef.current);
     };
   }, []);
 
-  function startRestTimer() {
+  function getDefaultRestForExercise(name: string): number {
+    const lower = name.toLowerCase();
+    if (/push.?up|pull.?up|chin.?up|\bdip\b|burpee|plank|sit.?up|\bcrunch\b/.test(lower)) return 60;
+    if (/squat|deadlift|bench press|overhead press|barbell row|lat pull|pulldown|chin|snatch|clean|jerk/.test(lower)) return 180;
+    if (/curl|extension|raise|fly|flye|pullover|kickback|\bshrug\b|face pull/.test(lower)) return 90;
+    return 120;
+  }
+
+  function startRestTimer(exName?: string, overrideSecs?: number) {
+    let secs: number;
+    if (overrideSecs !== undefined) {
+      secs = overrideSecs;
+    } else if (exName && restTimes[exName.toLowerCase()] !== undefined) {
+      secs = restTimes[exName.toLowerCase()];
+    } else if (exName) {
+      secs = getDefaultRestForExercise(exName);
+    } else {
+      secs = restTimerDefault;
+    }
+    setCurrentRestExercise(exName ?? null);
+    setRestTimerComplete(false);
     if (restIntervalRef.current) clearInterval(restIntervalRef.current);
-    setRestRemaining(restTimerDefault);
+    restTimerStartVal.current = secs;
+    setRestRemaining(secs);
     setRestTimerActive(true);
 
     restIntervalRef.current = setInterval(() => {
       setRestRemaining((prev) => {
         if (prev <= 1) {
           clearInterval(restIntervalRef.current!);
-          setRestTimerActive(false);
+          setRestTimerComplete(true);
           onRestComplete();
+          setTimeout(() => {
+            setRestTimerActive(false);
+            setRestTimerComplete(false);
+          }, 4000);
           return 0;
         }
         return prev - 1;
@@ -169,6 +249,7 @@ export default function WorkoutScreen() {
   function skipRestTimer() {
     if (restIntervalRef.current) clearInterval(restIntervalRef.current);
     setRestTimerActive(false);
+    setRestTimerComplete(false);
   }
 
   function onRestComplete() {
@@ -187,13 +268,6 @@ export default function WorkoutScreen() {
       });
     } catch (_) {}
 
-    // Pulse animation
-    Animated.sequence([
-      Animated.timing(restCompleteScale, { toValue: 1.15, duration: 150, useNativeDriver: true }),
-      Animated.timing(restCompleteScale, { toValue: 1, duration: 150, useNativeDriver: true }),
-      Animated.timing(restCompleteScale, { toValue: 1.1, duration: 100, useNativeDriver: true }),
-      Animated.timing(restCompleteScale, { toValue: 1, duration: 100, useNativeDriver: true }),
-    ]).start();
   }
 
   function formatRestTime(secs: number): string {
@@ -206,29 +280,20 @@ export default function WorkoutScreen() {
 
   function startSessionTimer(mins: number) {
     if (sessionTimerRef.current) clearInterval(sessionTimerRef.current);
+    setSessionMode('countdown');
     setSessionTimerMins(mins);
     setSessionTimerSecs(mins * 60);
     setSessionTimerActive(true);
     sessionFiveNotified.current = false;
     sessionTimerRef.current = setInterval(() => {
       setSessionTimerSecs((prev) => {
-        if (prev === 5 * 60 + 1 && !sessionFiveNotified.current) {
-          sessionFiveNotified.current = true;
-          Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-          try {
-            const Notifications = require('expo-notifications');
-            Notifications.scheduleNotificationAsync({
-              content: { title: 'GRIT', body: '5 minutes left in your session.' },
-              trigger: null,
-            });
-          } catch (_) {}
-        }
         if (prev <= 1) {
           clearInterval(sessionTimerRef.current!);
           setSessionTimerActive(false);
-          Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
-          setTimeout(() => Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning), 400);
-          Alert.alert("Time's up", "Wrap it up. Log your final sets and finish.");
+          Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
+          setTimeout(() => Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy), 300);
+          setTimeout(() => Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy), 600);
+          Alert.alert('Session over.', 'Get out.');
           return 0;
         }
         return prev - 1;
@@ -244,29 +309,20 @@ export default function WorkoutScreen() {
     sessionFiveNotified.current = false;
   }
 
-  // ─── Volume helpers ──────────────────────────────────────────────────────────
-
-  function computeSessionVolume(s: WorkoutSession): number {
-    return s.exercises.reduce(
-      (total, ex) =>
-        total +
-        ex.sets.reduce(
-          (sum, set) => sum + (set.completed && set.weight > 0 ? set.weight * set.reps : 0),
-          0
-        ),
-      0
-    );
+  function applyTimerSelection(mode: 'countup' | 'countdown', targetMins: number | null) {
+    const pref = { mode, targetMins };
+    lastTimerPrefRef.current = pref;
+    AsyncStorage.setItem('@grit/sessionTimerPref', JSON.stringify(pref));
+    if (mode === 'countdown' && targetMins) {
+      stopElapsedTimer();
+      startSessionTimer(targetMins);
+    } else {
+      stopSessionTimer();
+      setSessionMode('countup');
+      startElapsedTimer();
+    }
   }
 
-  function formatVolume(v: number): string {
-    if (v >= 1000) return `${(v / 1000).toFixed(1)}t`;
-    return `${Math.round(v)}kg`;
-  }
-
-  async function dismissVolumeTooltip() {
-    await AsyncStorage.setItem('@grit/hasSeenVolumeTooltip', 'true');
-    setHasSeenVolume(true);
-  }
 
   // ─── Data Loading ────────────────────────────────────────────────────────────
 
@@ -296,8 +352,31 @@ export default function WorkoutScreen() {
     doStartWorkout();
   }
 
+  function formatElapsed(secs: number): string {
+    const h = Math.floor(secs / 3600);
+    const m = Math.floor((secs % 3600) / 60);
+    const s = secs % 60;
+    if (h > 0) return `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+    return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+  }
+
+  function startElapsedTimer() {
+    if (elapsedIntervalRef.current) clearInterval(elapsedIntervalRef.current);
+    setElapsedSecs(0);
+    elapsedIntervalRef.current = setInterval(() => {
+      setElapsedSecs((prev) => prev + 1);
+    }, 1000);
+  }
+
+  function stopElapsedTimer() {
+    if (elapsedIntervalRef.current) clearInterval(elapsedIntervalRef.current);
+    elapsedIntervalRef.current = null;
+    setElapsedSecs(0);
+  }
+
   async function doStartWorkout() {
     stopSessionTimer();
+    stopElapsedTimer();
     setLastLoggedWeights({});
     setLastLoggedRepsMap({});
     setLastLoggedExercise(null);
@@ -311,24 +390,26 @@ export default function WorkoutScreen() {
       notes: '',
     });
 
-    // Show reorder hint for first 3 sessions
+    // Gym focus mode — schedule one random distraction notification
     try {
-      const raw = await AsyncStorage.getItem('@grit/reorderHintCount');
-      const count = raw ? parseInt(raw, 10) : 0;
-      if (count < 3) {
-        await AsyncStorage.setItem('@grit/reorderHintCount', String(count + 1));
-        setReorderHintVisible(true);
-        if (reorderHintTimer.current) clearTimeout(reorderHintTimer.current);
-        reorderHintTimer.current = setTimeout(() => {
-          setReorderHintVisible(false);
-        }, 3000);
+      const notifSettings = await getNotificationSettings();
+      if (notifSettings.gymFocusMode) {
+        const Notifications = require('expo-notifications');
+        const delaySecs = Math.floor(Math.random() * (40 - 15 + 1) + 15) * 60;
+        const msg = GYM_FOCUS_MESSAGES[Math.floor(Math.random() * GYM_FOCUS_MESSAGES.length)];
+        await Notifications.scheduleNotificationAsync({
+          content: { title: 'GRIT 🔒', body: msg },
+          trigger: { seconds: delaySecs },
+        });
       }
     } catch (_) {}
+
   }
 
   // ─── Template Load ───────────────────────────────────────────────────────────
 
   function loadTemplate(template: WorkoutTemplate) {
+    stopElapsedTimer();
     setStartTime(new Date());
     setIsActive(true);
     setSession({
@@ -359,7 +440,7 @@ export default function WorkoutScreen() {
       ...prev,
       exercises: [
         ...prev.exercises,
-        { name, sets: [emptySet(defaultWeight, 8)] },
+        { name, sets: [emptySet(defaultWeight, 0)] },
       ],
     }));
     setShowExerciseModal(false);
@@ -486,15 +567,6 @@ export default function WorkoutScreen() {
   function toggleSetComplete(exIdx: number, setIdx: number) {
     const willBeCompleted = !session.exercises[exIdx]?.sets[setIdx]?.completed;
 
-    // Validate before marking complete
-    if (willBeCompleted) {
-      const set = session.exercises[exIdx]?.sets[setIdx];
-      if (!set || set.weight === 0 || set.reps === 0) {
-        Alert.alert('Missing info', 'Enter weight and reps before completing this set.');
-        return;
-      }
-    }
-
     setSession((prev) => {
       const exercises = [...prev.exercises];
       const ex = { ...exercises[exIdx] };
@@ -508,11 +580,30 @@ export default function WorkoutScreen() {
 
     // Start rest timer when set is marked as complete
     if (willBeCompleted) {
-      startRestTimer();
+      const exName = session.exercises[exIdx]?.name ?? '';
+      const perSide = getIsPerSide(exName);
+      if (perSide) {
+        const base = restTimes[exName.toLowerCase()] ?? getDefaultRestForExercise(exName);
+        startRestTimer(exName, Math.floor(base / 2));
+      } else {
+        startRestTimer(exName);
+      }
     }
   }
 
   // ─── Quick Log ──────────────────────────────────────────────────────────────
+
+  function openQuickPanel() {
+    setQuickText('');
+    setQuickError('');
+    setShowQuickPanel(true);
+  }
+
+  function closeQuickPanel() {
+    setShowQuickPanel(false);
+    setQuickText('');
+    setQuickError('');
+  }
 
   async function handleQuickLog() {
     const text = quickText.trim();
@@ -537,13 +628,31 @@ export default function WorkoutScreen() {
     }
 
     if (!results) {
-      // Never show a generic error — ask for the specific missing piece
-      setQuickError(getMissingPieceQuestion(text, lastLoggedExercise));
-      return;
+      // Lenient fallback: extract whatever we can, fill 0 for missing values
+      const weightMatch = text.match(/(\d+(?:\.\d+)?)\s*(?:kg|lb|lbs)/i);
+      const repsMatch = text.match(/(\d+)\s*(?:rep|reps|x|×)/i)
+        ?? (!weightMatch ? text.match(/\b(\d+)\b/) : null);
+      const parsedWeight = weightMatch ? parseFloat(weightMatch[1]) : 0;
+      const parsedReps = repsMatch ? parseInt(repsMatch[1], 10) : 0;
+      const namePart = text
+        .replace(/\b\d+(?:\.\d+)?\s*(?:kg|lb|lbs)\b/gi, '')
+        .replace(/\b\d+\s*(?:rep|reps|x|×)\b/gi, '')
+        .replace(/\b\d+\b/g, '')
+        .replace(/\s+/g, ' ')
+        .trim();
+      const exerciseName = namePart.length >= 2
+        ? namePart.replace(/\b\w/g, (c) => c.toUpperCase())
+        : lastLoggedExercise;
+      if (!exerciseName) {
+        setQuickError('What exercise?');
+        return;
+      }
+      results = [{ exerciseName, weight: parsedWeight, reps: parsedReps, sets: 1 }];
     }
 
     setQuickError('');
     setQuickText('');
+    setShowQuickPanel(false);
 
     // Log all parsed entries — also update per-exercise weight/reps memory
     for (const parsed of results) {
@@ -650,7 +759,18 @@ export default function WorkoutScreen() {
       ? Math.round((Date.now() - startTime.getTime()) / 60000)
       : 0;
 
-    const finalSession: WorkoutSession = { ...session, duration };
+    // Auto-complete any set that has weight or reps filled in
+    const finalSession: WorkoutSession = {
+      ...session,
+      duration,
+      exercises: session.exercises.map((ex) => ({
+        ...ex,
+        sets: ex.sets.map((set) => ({
+          ...set,
+          completed: set.completed || set.weight > 0 || set.reps > 0,
+        })),
+      })),
+    };
 
     setSaving(true);
     try {
@@ -661,9 +781,10 @@ export default function WorkoutScreen() {
       const updatedSessions = await getSessions();
       await analyseProgressionSuggestions(finalSession, updatedSessions);
 
-      // Stop rest timer
+      // Stop timers
       if (restIntervalRef.current) clearInterval(restIntervalRef.current);
       setRestTimerActive(false);
+      stopElapsedTimer();
       setIsActive(false);
       setAllSessions(updatedSessions);
 
@@ -698,6 +819,7 @@ export default function WorkoutScreen() {
           if (restIntervalRef.current) clearInterval(restIntervalRef.current);
           setRestTimerActive(false);
           stopSessionTimer();
+          stopElapsedTimer();
           setIsActive(false);
         },
       },
@@ -718,6 +840,7 @@ export default function WorkoutScreen() {
           deleteTemplate(id).then(() => getTemplates().then(setTemplates));
         }}
         onLoadProgramSession={(exercises) => {
+          stopElapsedTimer();
           setStartTime(new Date());
           setIsActive(true);
           setSession({
@@ -753,19 +876,27 @@ export default function WorkoutScreen() {
           <TouchableOpacity onPress={discardWorkout}>
             <Text style={styles.discardText}>Discard</Text>
           </TouchableOpacity>
-          <TouchableOpacity style={styles.timerToggleBtn} onPress={() => setShowTimerPicker(true)}>
-            <Ionicons
-              name="timer-outline"
-              size={14}
-              color={sessionTimerActive ? (sessionTimerSecs <= 300 ? COLORS.warning : COLORS.accent) : COLORS.textMuted}
-            />
-            {sessionTimerActive ? (
-              <Text style={[styles.sessionCountdown, sessionTimerSecs <= 300 && { color: COLORS.warning }]}>
-                {formatRestTime(sessionTimerSecs)}
+          <TouchableOpacity
+            style={styles.headerCenter}
+            onPress={() => {
+              setPickerMins(sessionTimerMins ?? 45);
+              setShowTimerPicker(true);
+            }}
+            hitSlop={8}
+          >
+            {sessionMode === 'countdown' && sessionTimerActive ? (
+              <Text style={[styles.elapsedTimer, sessionTimerSecs <= 300 && styles.elapsedTimerWarning]}>
+                {formatElapsed(sessionTimerSecs)}
               </Text>
             ) : (
-              <Text style={styles.activeTitle}>In Progress</Text>
+              <Text style={styles.elapsedTimer}>{formatElapsed(elapsedSecs)}</Text>
             )}
+            <Ionicons
+              name="timer-outline"
+              size={12}
+              color={sessionTimerActive && sessionTimerSecs <= 300 ? '#e8ff00' : '#555'}
+            />
+            <Text style={styles.timerHint}>Tap to set</Text>
           </TouchableOpacity>
           <TouchableOpacity
             style={[styles.finishButton, saving && { opacity: 0.5 }]}
@@ -776,101 +907,23 @@ export default function WorkoutScreen() {
           </TouchableOpacity>
         </View>
 
-        {/* Rest Timer Banner */}
+
+
+
+        {/* Rest timer strip */}
         {restTimerActive && (
-          <Animated.View
-            style={[
-              styles.restTimerBanner,
-              { transform: [{ scale: restCompleteScale }] },
-              restRemaining <= 10 && styles.restTimerBannerUrgent,
-            ]}
-          >
-            <View style={styles.restTimerLeft}>
-              <Ionicons
-                name="timer-outline"
-                size={20}
-                color={restRemaining <= 10 ? COLORS.warning : COLORS.accent}
-              />
-              <Text style={styles.restTimerLabel}>REST</Text>
-            </View>
-            <Text
-              style={[
-                styles.restTimerCount,
-                restRemaining <= 10 && { color: COLORS.warning },
-              ]}
-            >
-              {formatRestTime(restRemaining)}
-            </Text>
-            <View style={styles.restTimerRight}>
-              <View style={styles.restProgressBar}>
-                <View
-                  style={[
-                    styles.restProgressFill,
-                    {
-                      width: `${((restTimerDefault - restRemaining) / restTimerDefault) * 100}%`,
-                      backgroundColor: restRemaining <= 10 ? COLORS.warning : COLORS.accent,
-                    },
-                  ]}
-                />
-              </View>
-              <TouchableOpacity onPress={skipRestTimer} style={styles.restSkipBtn}>
-                <Text style={styles.restSkipText}>Skip</Text>
-              </TouchableOpacity>
-            </View>
-          </Animated.View>
+          <RestTimerStrip
+            remaining={restRemaining}
+            total={restTimerStartVal.current}
+            exerciseName={currentRestExercise}
+            complete={restTimerComplete}
+            onSkip={skipRestTimer}
+            onAdjust={() => {
+              setRestSheetDuration(restTimerStartVal.current);
+              setShowRestSheet(true);
+            }}
+          />
         )}
-
-        {restTimerActive === false && restRemaining === 0 && (
-          <View style={styles.restReadyBanner}>
-            <Ionicons name="checkmark-circle" size={18} color={COLORS.success} />
-            <Text style={styles.restReadyText}>Rest done. Back to work.</Text>
-          </View>
-        )}
-
-        {reorderHintVisible && (
-          <View style={styles.reorderHintBanner}>
-            <Ionicons name="reorder-three" size={16} color={COLORS.accent} />
-            <Text style={styles.reorderHintText}>Hold an exercise header to drag and reorder</Text>
-          </View>
-        )}
-
-        {/* Volume display — educational tooltip first time, comparison after */}
-        {(() => {
-          const vol = computeSessionVolume(session);
-          if (vol === 0) return null;
-          const lastVol = allSessions.length > 0 ? computeSessionVolume(allSessions[0]) : 0;
-          if (!hasSeenVolume) {
-            return (
-              <View style={styles.volumeTooltip}>
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.volumeTooltipTitle}>Volume = sets × reps × weight</Text>
-                  <Text style={styles.volumeTooltipBody}>
-                    Increase it over time. That's progressive overload.
-                  </Text>
-                </View>
-                <TouchableOpacity onPress={dismissVolumeTooltip} style={styles.volumeGotItBtn}>
-                  <Text style={styles.volumeGotItText}>Got it</Text>
-                </TouchableOpacity>
-              </View>
-            );
-          }
-          const diff = vol - lastVol;
-          return (
-            <View style={styles.volumeBar}>
-              <Ionicons name="barbell-outline" size={12} color={COLORS.textMuted} />
-              <Text style={styles.volumeNum}>{formatVolume(vol)}</Text>
-              {lastVol > 0 && (
-                <Text style={[styles.volumeComp, { color: diff >= 0 ? COLORS.success : COLORS.warning }]}>
-                  {diff > 0
-                    ? `↑ from ${formatVolume(lastVol)} last session — keep going.`
-                    : diff === 0
-                    ? `= matched ${formatVolume(lastVol)} last session.`
-                    : `↓ from ${formatVolume(lastVol)} last session — lower than usual.`}
-                </Text>
-              )}
-            </View>
-          );
-        })()}
 
         <View {...dragPanResponder.panHandlers} style={{ flex: 1 }}>
         <ScrollView showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled" scrollEnabled={dragFromIdx === null}>
@@ -917,8 +970,34 @@ export default function WorkoutScreen() {
                     }
                   }}
                 >
-                  <Text style={styles.exName}>{ex.name}</Text>
+                  <View style={{ flex: 1 }}>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                      <Text style={styles.exName}>{ex.name}</Text>
+                      {getIsPerSide(ex.name) && (
+                        <Text style={styles.perSideLabel}>per side</Text>
+                      )}
+                    </View>
+                  </View>
                   <View style={styles.exHeaderActions}>
+                    {isUnilateral(ex.name) && (
+                      <TouchableOpacity
+                        style={[
+                          styles.perSideToggle,
+                          getIsPerSide(ex.name) && styles.perSideToggleActive,
+                        ]}
+                        onPress={() => togglePerSide(ex.name)}
+                        hitSlop={8}
+                      >
+                        <Text
+                          style={[
+                            styles.perSideToggleText,
+                            getIsPerSide(ex.name) && styles.perSideToggleTextActive,
+                          ]}
+                        >
+                          ½ rest
+                        </Text>
+                      </TouchableOpacity>
+                    )}
                     <TouchableOpacity
                       style={styles.watchFormBtn}
                       onPress={() => watchForm(ex.name)}
@@ -1013,66 +1092,47 @@ export default function WorkoutScreen() {
         </ScrollView>
         </View>
 
-        {/* Running set log for last-logged exercise */}
-        {lastLoggedExercise && (() => {
-          const ex = session.exercises.find(
-            (e) => e.name.toLowerCase() === lastLoggedExercise.toLowerCase()
-          );
-          const doneSets = ex?.sets.filter((s) => s.completed) ?? [];
-          if (doneSets.length === 0) return null;
-          return (
-            <View style={styles.runningLog}>
-              <Text style={styles.runningLogName} numberOfLines={1}>{lastLoggedExercise}</Text>
-              <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ flex: 1 }}>
-                <View style={styles.runningLogSets}>
-                  {doneSets.map((s, i) => (
-                    <View key={i} style={styles.runningSetChip}>
-                      <Text style={styles.runningSetText}>{s.weight}×{s.reps}</Text>
-                    </View>
-                  ))}
-                </View>
-              </ScrollView>
-            </View>
-          );
-        })()}
 
-        {/* Quick Log hint label */}
-        <View style={styles.quickLogHintRow}>
-          <Ionicons name="flash" size={12} color={COLORS.accent} />
-          <Text style={styles.quickLogHintText}>
-            Type any lift to log it instantly
-          </Text>
-          <Text style={styles.quickLogHintExample}>bench 80 8 · squat 100 5</Text>
-        </View>
-
-        {/* Quick Log Bar */}
-        <View style={styles.quickLogBar}>
-          <TextInput
-            style={styles.quickLogInput}
-            value={quickText}
-            onChangeText={(t) => { setQuickText(t); setQuickError(''); }}
-            placeholder={QUICK_PLACEHOLDERS[placeholderIdx]}
-            placeholderTextColor={COLORS.textMuted}
-            returnKeyType="done"
-            onSubmitEditing={handleQuickLog}
-            autoCorrect={false}
-            autoCapitalize="none"
-            editable={!quickParsing}
-            scrollEnabled={true}
-            multiline={false}
-            numberOfLines={1}
-            textAlignVertical="center"
-          />
-          <TouchableOpacity
-            style={[styles.quickLogSend, quickParsing && { opacity: 0.5 }]}
-            onPress={handleQuickLog}
-            disabled={quickParsing}
-          >
-            <Ionicons name={quickParsing ? 'ellipsis-horizontal' : 'flash'} size={20} color={COLORS.background} />
-          </TouchableOpacity>
-          {quickError ? <Text style={styles.quickLogError}>{quickError}</Text> : null}
-        </View>
       </KeyboardAvoidingView>
+
+      {/* Floating quick log button */}
+      <TouchableOpacity style={styles.quickFab} onPress={openQuickPanel} activeOpacity={0.85}>
+        <Ionicons name="flash" size={22} color="#000000" />
+      </TouchableOpacity>
+
+      {/* Quick log slide-up panel */}
+      <Modal visible={showQuickPanel} transparent animationType="fade" onRequestClose={closeQuickPanel}>
+        <View style={styles.quickModalWrap}>
+          <TouchableOpacity style={{ flex: 1 }} activeOpacity={1} onPress={closeQuickPanel} />
+          <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+            <View style={styles.quickPanel}>
+              {quickError ? <Text style={styles.quickPanelError}>{quickError}</Text> : null}
+              <View style={styles.quickPanelRow}>
+                <TextInput
+                  style={styles.quickPanelInput}
+                  value={quickText}
+                  onChangeText={(t) => { setQuickText(t); setQuickError(''); }}
+                  placeholder="bench 50kg 8reps"
+                  placeholderTextColor={COLORS.textMuted}
+                  returnKeyType="done"
+                  onSubmitEditing={handleQuickLog}
+                  autoCorrect={false}
+                  autoCapitalize="none"
+                  autoFocus
+                  editable={!quickParsing}
+                />
+                <TouchableOpacity
+                  style={[styles.quickPanelSend, quickParsing && { opacity: 0.5 }]}
+                  onPress={handleQuickLog}
+                  disabled={quickParsing}
+                >
+                  <Ionicons name={quickParsing ? 'ellipsis-horizontal' : 'flash'} size={20} color={COLORS.background} />
+                </TouchableOpacity>
+              </View>
+            </View>
+          </KeyboardAvoidingView>
+        </View>
+      </Modal>
 
       {/* Exercise picker modal */}
       <Modal visible={showExerciseModal} animationType="slide" presentationStyle="pageSheet">
@@ -1109,6 +1169,7 @@ export default function WorkoutScreen() {
       {/* Session timer picker modal */}
       <Modal visible={showTimerPicker} animationType="slide" transparent>
         <View style={timerStyles.overlay}>
+          <TouchableOpacity style={{ flex: 1 }} activeOpacity={1} onPress={() => setShowTimerPicker(false)} />
           <View style={timerStyles.sheet}>
             <View style={timerStyles.header}>
               <Text style={timerStyles.title}>Session timer</Text>
@@ -1116,59 +1177,117 @@ export default function WorkoutScreen() {
                 <Ionicons name="close" size={22} color={COLORS.text} />
               </TouchableOpacity>
             </View>
+
+            {/* Preset buttons */}
             <View style={timerStyles.presets}>
-              {[30, 45, 60, 90].map((mins) => (
-                <TouchableOpacity
-                  key={mins}
-                  style={[
-                    timerStyles.presetBtn,
-                    sessionTimerActive && sessionTimerMins === mins && timerStyles.presetBtnActive,
-                  ]}
-                  onPress={() => { startSessionTimer(mins); setShowTimerPicker(false); }}
-                >
-                  <Text
-                    style={[
-                      timerStyles.presetText,
-                      sessionTimerActive && sessionTimerMins === mins && timerStyles.presetTextActive,
-                    ]}
+              {([30, 45, 60, 90] as const).map((mins) => {
+                const label = mins === 90 ? '1hr 30' : `${mins} min`;
+                const selected = pickerMins === mins;
+                return (
+                  <TouchableOpacity
+                    key={mins}
+                    style={[timerStyles.presetBtn, selected && timerStyles.presetBtnActive]}
+                    onPress={() => setPickerMins(mins)}
                   >
-                    {mins} min
-                  </Text>
-                </TouchableOpacity>
-              ))}
+                    <Text style={[timerStyles.presetText, selected && timerStyles.presetTextActive]}>
+                      {label}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
             </View>
-            <View style={timerStyles.customRow}>
-              <TextInput
-                style={timerStyles.customInput}
-                value={customTimerInput}
-                onChangeText={setCustomTimerInput}
-                placeholder="Custom minutes"
-                placeholderTextColor={COLORS.textMuted}
-                keyboardType="number-pad"
-              />
+
+            {/* Custom stepper */}
+            <View style={timerStyles.stepperRow}>
               <TouchableOpacity
-                style={timerStyles.customBtn}
-                onPress={() => {
-                  const mins = parseInt(customTimerInput, 10);
-                  if (mins > 0 && mins <= 300) {
-                    startSessionTimer(mins);
-                    setShowTimerPicker(false);
-                    setCustomTimerInput('');
-                  }
-                }}
+                style={timerStyles.stepperBtn}
+                onPress={() => setPickerMins((v) => Math.max(5, v - 5))}
               >
-                <Text style={timerStyles.customBtnText}>Set</Text>
+                <Text style={timerStyles.stepperBtnText}>−</Text>
+              </TouchableOpacity>
+              <Text style={timerStyles.stepperValue}>{pickerMins} min</Text>
+              <TouchableOpacity
+                style={timerStyles.stepperBtn}
+                onPress={() => setPickerMins((v) => Math.min(180, v + 5))}
+              >
+                <Text style={timerStyles.stepperBtnText}>+</Text>
               </TouchableOpacity>
             </View>
+
+            {/* Confirm */}
+            <TouchableOpacity
+              style={timerStyles.confirmBtn}
+              onPress={() => {
+                applyTimerSelection('countdown', pickerMins);
+                setShowTimerPicker(false);
+              }}
+            >
+              <Text style={timerStyles.confirmBtnText}>Confirm</Text>
+            </TouchableOpacity>
+
+            {/* Stop (only when a countdown is running) */}
             {sessionTimerActive && (
               <TouchableOpacity
                 style={timerStyles.stopBtn}
-                onPress={() => { stopSessionTimer(); setShowTimerPicker(false); }}
+                onPress={() => { stopSessionTimer(); setSessionMode('countup'); setShowTimerPicker(false); }}
               >
                 <Ionicons name="stop-circle-outline" size={18} color={COLORS.danger} />
-                <Text style={timerStyles.stopBtnText}>Stop timer</Text>
+                <Text style={timerStyles.stopBtnText}>Stop countdown</Text>
               </TouchableOpacity>
             )}
+          </View>
+        </View>
+      </Modal>
+
+      {/* Rest duration adjustment sheet */}
+      <Modal visible={showRestSheet} animationType="slide" transparent>
+        <View style={timerStyles.overlay}>
+          <TouchableOpacity style={{ flex: 1 }} activeOpacity={1} onPress={() => setShowRestSheet(false)} />
+          <View style={timerStyles.sheet}>
+            <View style={timerStyles.header}>
+              <Text style={timerStyles.title}>
+                {currentRestExercise ? currentRestExercise : 'Rest Timer'}
+              </Text>
+              <TouchableOpacity onPress={() => setShowRestSheet(false)} hitSlop={12}>
+                <Ionicons name="close" size={22} color={COLORS.text} />
+              </TouchableOpacity>
+            </View>
+            <View style={timerStyles.restAdjustRow}>
+              <TouchableOpacity
+                style={timerStyles.restAdjBtn}
+                onPress={() => setRestSheetDuration((v) => Math.max(60, v - 30))}
+              >
+                <Text style={timerStyles.restAdjBtnText}>−30s</Text>
+              </TouchableOpacity>
+              <Text style={timerStyles.restDurationText}>{formatRestTime(restSheetDuration)}</Text>
+              <TouchableOpacity
+                style={timerStyles.restAdjBtn}
+                onPress={() => setRestSheetDuration((v) => Math.min(600, v + 30))}
+              >
+                <Text style={timerStyles.restAdjBtnText}>+30s</Text>
+              </TouchableOpacity>
+            </View>
+            {currentRestExercise && (
+              <TouchableOpacity
+                style={timerStyles.saveRestBtn}
+                onPress={async () => {
+                  const updated = { ...restTimes, [currentRestExercise.toLowerCase()]: restSheetDuration };
+                  setRestTimes(updated);
+                  await saveRestTime(currentRestExercise, restSheetDuration);
+                  startRestTimer(currentRestExercise, restSheetDuration);
+                  setShowRestSheet(false);
+                }}
+              >
+                <Text style={timerStyles.saveRestBtnText}>Save & Apply</Text>
+              </TouchableOpacity>
+            )}
+            <TouchableOpacity
+              style={timerStyles.stopBtn}
+              onPress={() => { skipRestTimer(); setShowRestSheet(false); }}
+            >
+              <Ionicons name="stop-circle-outline" size={18} color={COLORS.danger} />
+              <Text style={timerStyles.stopBtnText}>Skip rest</Text>
+            </TouchableOpacity>
           </View>
         </View>
       </Modal>
@@ -1201,6 +1320,279 @@ export default function WorkoutScreen() {
   );
 }
 
+// ─── New Rest Timer Components ───────────────────────────────────────────────
+
+function getMuscleGroup(
+  name: string
+): 'chest' | 'back' | 'legs' | 'shoulders' | 'biceps' | 'triceps' | 'calves' | 'abs' | 'full' {
+  const l = name.toLowerCase();
+  if (/bench|chest|pec|incline dumbbell press|dumbbell chest|chest fly/.test(l)) return 'chest';
+  if (/\brow\b|lat pull|pulldown|pull.?up|chin.?up|cable row|dumbbell row/.test(l)) return 'back';
+  if (/squat|deadlift|leg press|romanian|bulgarian|hack squat|\blunge\b|leg curl|leg extension/.test(l)) return 'legs';
+  if (/overhead press|lateral raise|front raise|rear delt|shoulder press/.test(l)) return 'shoulders';
+  if (/bicep curl|hammer curl|preacher curl|concentration curl/.test(l)) return 'biceps';
+  if (/tricep|skull crusher|overhead tricep|weighted dip/.test(l)) return 'triceps';
+  if (/calf raise|calf/.test(l)) return 'calves';
+  if (/plank|crunch|ab wheel|leg raise|russian twist|sit.?up/.test(l)) return 'abs';
+  return 'full';
+}
+
+function LiquidTimer({
+  size,
+  progress,
+  remaining,
+  complete,
+}: {
+  size: number;
+  progress: number;
+  remaining: number;
+  complete: boolean;
+}) {
+  const fillHeight = Math.round(size * progress);
+  const borderAlpha = (0.2 + progress * 0.5).toFixed(2);
+  const borderColor = `rgba(232,255,0,${borderAlpha})`;
+  const textColor = progress > 0.5 ? '#000000' : '#ffffff';
+  const fontSize = size < 60 ? 12 : 20;
+  const mins = Math.floor(remaining / 60);
+  const secs = remaining % 60;
+  const timeStr = complete ? 'GO' : `${mins}:${secs.toString().padStart(2, '0')}`;
+  return (
+    <View
+      style={{
+        width: size,
+        height: size,
+        borderRadius: size / 2,
+        overflow: 'hidden',
+        backgroundColor: '#111',
+        borderWidth: 2,
+        borderColor,
+        alignItems: 'center',
+        justifyContent: 'center',
+      }}
+    >
+      <View
+        style={{
+          position: 'absolute',
+          bottom: 0,
+          left: 0,
+          right: 0,
+          height: fillHeight,
+          backgroundColor: '#e8ff00',
+        }}
+      />
+      <Text
+        style={{
+          fontSize,
+          fontWeight: '900',
+          color: textColor,
+          textAlign: 'center',
+          fontVariant: ['tabular-nums'] as any,
+          zIndex: 1,
+        }}
+      >
+        {timeStr}
+      </Text>
+    </View>
+  );
+}
+
+function BodySVG({ muscleGroup, progress }: { muscleGroup: string; progress: number }) {
+  const alpha = 0.08 + progress * 0.42;
+  const hl = `rgba(232,255,0,${alpha.toFixed(2)})`;
+  const hlDim = `rgba(232,255,0,${(alpha * 0.6).toFixed(2)})`;
+  const bodyFill = '#1a1a1a';
+  const bodyStroke = '#2a2a2a';
+
+  const highlights = (() => {
+    switch (muscleGroup) {
+      case 'chest':
+        return (
+          <>
+            <Ellipse cx={38} cy={46} rx={13} ry={10} fill={hl} />
+            <Ellipse cx={62} cy={46} rx={13} ry={10} fill={hl} />
+          </>
+        );
+      case 'back':
+        return (
+          <>
+            <Path d="M 23,34 L 27,34 L 29,88 L 23,82 Z" fill={hl} />
+            <Path d="M 77,34 L 73,34 L 71,88 L 77,82 Z" fill={hl} />
+            <Path d="M 36,28 L 64,28 L 62,38 L 38,38 Z" fill={hlDim} />
+          </>
+        );
+      case 'shoulders':
+        return (
+          <>
+            <Ellipse cx={19} cy={38} rx={9} ry={8} fill={hl} />
+            <Ellipse cx={81} cy={38} rx={9} ry={8} fill={hl} />
+          </>
+        );
+      case 'biceps':
+        return (
+          <>
+            <Ellipse cx={13} cy={60} rx={6} ry={12} fill={hl} />
+            <Ellipse cx={87} cy={60} rx={6} ry={12} fill={hl} />
+          </>
+        );
+      case 'triceps':
+        return (
+          <>
+            <Ellipse cx={14} cy={62} rx={5} ry={12} fill={hl} />
+            <Ellipse cx={86} cy={62} rx={5} ry={12} fill={hl} />
+          </>
+        );
+      case 'legs':
+        return (
+          <>
+            <Ellipse cx={28} cy={118} rx={9} ry={24} fill={hl} />
+            <Ellipse cx={72} cy={118} rx={9} ry={24} fill={hl} />
+          </>
+        );
+      case 'calves':
+        return (
+          <>
+            <Ellipse cx={26} cy={152} rx={8} ry={8} fill={hl} />
+            <Ellipse cx={74} cy={152} rx={8} ry={8} fill={hl} />
+          </>
+        );
+      case 'abs':
+        return <SvgRect x={34} y={40} width={32} height={50} rx={4} fill={hl} />;
+      default:
+        return (
+          <SvgRect
+            x={10}
+            y={0}
+            width={80}
+            height={160}
+            rx={10}
+            fill={`rgba(232,255,0,${(alpha * 0.25).toFixed(2)})`}
+          />
+        );
+    }
+  })();
+
+  return (
+    <Svg width={100} height={160} viewBox="0 0 100 160">
+      {/* Head */}
+      <Circle cx={50} cy={13} r={11} fill={bodyFill} stroke={bodyStroke} strokeWidth={1} />
+      {/* Neck */}
+      <Path d="M 45,23 L 55,23 L 55,32 L 45,32 Z" fill={bodyFill} stroke={bodyStroke} strokeWidth={0.5} />
+      {/* Torso */}
+      <Path d="M 23,30 Q 50,26 77,30 L 73,92 L 27,92 Z" fill={bodyFill} stroke={bodyStroke} strokeWidth={1} />
+      {/* Shoulder caps */}
+      <Ellipse cx={20} cy={36} rx={8} ry={7} fill={bodyFill} stroke={bodyStroke} strokeWidth={1} />
+      <Ellipse cx={80} cy={36} rx={8} ry={7} fill={bodyFill} stroke={bodyStroke} strokeWidth={1} />
+      {/* Left upper arm */}
+      <Path d="M 21,36 L 10,44 L 8,78 L 18,78 Z" fill={bodyFill} stroke={bodyStroke} strokeWidth={1} />
+      {/* Right upper arm */}
+      <Path d="M 79,36 L 90,44 L 92,78 L 82,78 Z" fill={bodyFill} stroke={bodyStroke} strokeWidth={1} />
+      {/* Left forearm */}
+      <Path d="M 8,78 L 4,78 L 1,112 L 10,112 Z" fill={bodyFill} stroke={bodyStroke} strokeWidth={1} />
+      {/* Right forearm */}
+      <Path d="M 92,78 L 96,78 L 99,112 L 90,112 Z" fill={bodyFill} stroke={bodyStroke} strokeWidth={1} />
+      {/* Left thigh */}
+      <Path d="M 27,92 L 20,92 L 16,148 L 38,148 Z" fill={bodyFill} stroke={bodyStroke} strokeWidth={1} />
+      {/* Right thigh */}
+      <Path d="M 73,92 L 80,92 L 84,148 L 62,148 Z" fill={bodyFill} stroke={bodyStroke} strokeWidth={1} />
+      {/* Left calf */}
+      <Path d="M 16,148 L 38,148 L 36,158 L 18,158 Z" fill={bodyFill} stroke={bodyStroke} strokeWidth={1} />
+      {/* Right calf */}
+      <Path d="M 62,148 L 84,148 L 82,158 L 64,158 Z" fill={bodyFill} stroke={bodyStroke} strokeWidth={1} />
+      {/* Ab lines */}
+      <Path d="M 34,58 L 66,58" stroke={bodyStroke} strokeWidth={1} fill="none" />
+      <Path d="M 34,70 L 66,70" stroke={bodyStroke} strokeWidth={1} fill="none" />
+      <Path d="M 50,38 L 50,90" stroke={bodyStroke} strokeWidth={0.5} fill="none" />
+      {/* Collarbone */}
+      <Path d="M 48,30 Q 38,32 26,36" stroke={bodyStroke} strokeWidth={1} fill="none" />
+      <Path d="M 52,30 Q 62,32 74,36" stroke={bodyStroke} strokeWidth={1} fill="none" />
+      {/* Muscle highlights */}
+      {highlights}
+    </Svg>
+  );
+}
+
+function RestTimerStrip({
+  remaining,
+  total,
+  exerciseName,
+  complete,
+  onSkip,
+  onAdjust,
+}: {
+  remaining: number;
+  total: number;
+  exerciseName: string | null;
+  complete: boolean;
+  onSkip: () => void;
+  onAdjust: () => void;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const progress = total > 0 ? Math.max(0, Math.min(1, 1 - remaining / total)) : 0;
+  const muscleGroup = getMuscleGroup(exerciseName ?? '');
+  const muscleLabel =
+    muscleGroup === 'full'
+      ? 'Full body'
+      : muscleGroup.charAt(0).toUpperCase() + muscleGroup.slice(1);
+
+  // Auto-collapse when complete
+  useEffect(() => {
+    if (complete) setExpanded(false);
+  }, [complete]);
+
+  const stripTitle = complete ? 'Ready for next set' : `Resting · ${exerciseName ?? ''}`;
+
+  if (expanded) {
+    return (
+      <View style={restStripStyles.expandedPanel}>
+        <View style={restStripStyles.expandedHeaderRow}>
+          <View>
+            <Text style={restStripStyles.recoveringText}>RECOVERING</Text>
+            <Text style={restStripStyles.expandedExName} numberOfLines={1}>
+              {exerciseName}
+            </Text>
+          </View>
+          <TouchableOpacity onPress={() => setExpanded(false)}>
+            <Text style={restStripStyles.collapseText}>↓ collapse</Text>
+          </TouchableOpacity>
+        </View>
+        <View style={restStripStyles.expandedBody}>
+          <BodySVG muscleGroup={muscleGroup} progress={progress} />
+          <View style={restStripStyles.expandedRight}>
+            <LiquidTimer size={90} progress={progress} remaining={remaining} complete={complete} />
+            <Text style={restStripStyles.muscleLabel}>{muscleLabel}</Text>
+            <TouchableOpacity style={restStripStyles.adjustBtn} onPress={onAdjust}>
+              <Text style={restStripStyles.adjustBtnText}>Adjust</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={restStripStyles.skipBtn}
+              onPress={() => { onSkip(); setExpanded(false); }}
+            >
+              <Text style={restStripStyles.skipBtnText}>Skip</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </View>
+    );
+  }
+
+  return (
+    <TouchableOpacity
+      style={restStripStyles.collapsed}
+      onPress={() => !complete && setExpanded(true)}
+      activeOpacity={0.9}
+    >
+      <LiquidTimer size={52} progress={progress} remaining={remaining} complete={complete} />
+      <View style={restStripStyles.stripMid}>
+        <Text style={restStripStyles.stripTitle} numberOfLines={1}>
+          {stripTitle}
+        </Text>
+        {!complete && <Text style={restStripStyles.stripHint}>Tap to expand</Text>}
+      </View>
+      {!complete && <Text style={restStripStyles.arrowUp}>↑</Text>}
+    </TouchableOpacity>
+  );
+}
+
 // ─── Set Row ─────────────────────────────────────────────────────────────────
 
 interface SetRowProps {
@@ -1219,70 +1611,122 @@ function SetRow({
   setNum, set, onWeightDelta, onRepsDelta,
   onWeightChange, onRepsChange, onToggle, onRemove, canRemove,
 }: SetRowProps) {
+  const [flashWeight, setFlashWeight] = useState(false);
+  const [flashReps, setFlashReps] = useState(false);
+  const [showError, setShowError] = useState(false);
+  const flashTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  function handleToggle() {
+    if (!set.completed && (set.weight === 0 || set.reps === 0)) {
+      if (flashTimer.current) clearTimeout(flashTimer.current);
+      setFlashWeight(set.weight === 0);
+      setFlashReps(set.reps === 0);
+      setShowError(true);
+      flashTimer.current = setTimeout(() => {
+        setFlashWeight(false);
+        setFlashReps(false);
+        setShowError(false);
+      }, 1500);
+      return;
+    }
+    onToggle();
+  }
+
   return (
-    <View style={[setStyles.row, set.completed && setStyles.rowCompleted]}>
-      <View style={setStyles.setNumWrap}>
-        <Text style={setStyles.setNum}>{setNum}</Text>
-      </View>
-      <View style={setStyles.counterGroup}>
-        <TouchableOpacity style={setStyles.adjBtn} onPress={() => onWeightDelta(-1)}>
-          <Text style={setStyles.adjText}>−</Text>
-        </TouchableOpacity>
-        <TextInput
-          style={setStyles.valueInput}
-          value={set.weight === 0 ? '' : String(set.weight)}
-          onChangeText={onWeightChange}
-          keyboardType="decimal-pad"
-          placeholder="0"
-          placeholderTextColor={COLORS.textMuted}
-          selectTextOnFocus
-        />
-        <TouchableOpacity style={setStyles.adjBtn} onPress={() => onWeightDelta(1)}>
-          <Text style={setStyles.adjText}>+</Text>
-        </TouchableOpacity>
-      </View>
-      <View style={setStyles.counterGroup}>
-        <TouchableOpacity style={setStyles.adjBtn} onPress={() => onRepsDelta(-1)}>
-          <Text style={setStyles.adjText}>−</Text>
-        </TouchableOpacity>
-        <TextInput
-          style={setStyles.valueInput}
-          value={set.reps === 0 ? '' : String(set.reps)}
-          onChangeText={onRepsChange}
-          keyboardType="number-pad"
-          placeholder="0"
-          placeholderTextColor={COLORS.textMuted}
-          selectTextOnFocus
-        />
-        <TouchableOpacity style={setStyles.adjBtn} onPress={() => onRepsDelta(1)}>
-          <Text style={setStyles.adjText}>+</Text>
-        </TouchableOpacity>
-      </View>
-      {(() => {
-        const hasValues = set.weight > 0 && set.reps > 0;
-        const btnStyle = set.completed
-          ? setStyles.doneBtnActive
-          : hasValues
-          ? setStyles.doneBtnReady
-          : setStyles.doneBtnEmpty;
-        const iconColor = set.completed || hasValues ? COLORS.background : '#555555';
-        return (
-          <TouchableOpacity
-            style={[setStyles.doneBtn, btnStyle]}
-            onPress={onToggle}
-            onLongPress={canRemove ? onRemove : undefined}
-          >
-            <Ionicons
-              name={set.completed ? 'checkmark' : 'checkmark-outline'}
-              size={18}
-              color={iconColor}
-            />
+    <View>
+      <View style={setStyles.row}>
+        <View style={setStyles.setNumWrap}>
+          <Text style={setStyles.setNum}>{setNum}</Text>
+        </View>
+        <View style={[setStyles.counterGroup, flashWeight && setStyles.counterGroupError]}>
+          <TouchableOpacity style={setStyles.adjBtn} onPress={() => onWeightDelta(-1)}>
+            <Text style={setStyles.adjText}>−</Text>
           </TouchableOpacity>
-        );
-      })()}
+          <TextInput
+            style={setStyles.valueInput}
+            value={set.weight === 0 ? '' : String(set.weight)}
+            onChangeText={onWeightChange}
+            keyboardType="decimal-pad"
+            placeholder="0"
+            placeholderTextColor={COLORS.textMuted}
+            selectTextOnFocus
+          />
+          <TouchableOpacity style={setStyles.adjBtn} onPress={() => onWeightDelta(1)}>
+            <Text style={setStyles.adjText}>+</Text>
+          </TouchableOpacity>
+        </View>
+        <View style={[setStyles.counterGroup, flashReps && setStyles.counterGroupError]}>
+          <TouchableOpacity style={setStyles.adjBtn} onPress={() => onRepsDelta(-1)}>
+            <Text style={setStyles.adjText}>−</Text>
+          </TouchableOpacity>
+          <TextInput
+            style={setStyles.valueInput}
+            value={set.reps === 0 ? '' : String(set.reps)}
+            onChangeText={onRepsChange}
+            keyboardType="number-pad"
+            placeholder="0"
+            placeholderTextColor={COLORS.textMuted}
+            selectTextOnFocus
+          />
+          <TouchableOpacity style={setStyles.adjBtn} onPress={() => onRepsDelta(1)}>
+            <Text style={setStyles.adjText}>+</Text>
+          </TouchableOpacity>
+        </View>
+        <TouchableOpacity
+          style={[setStyles.doneBtn, set.completed ? setStyles.doneBtnActive : setStyles.doneBtnEmpty]}
+          onPress={handleToggle}
+          onLongPress={canRemove ? onRemove : undefined}
+        >
+          <Ionicons
+            name={set.completed ? 'checkmark' : 'checkmark-outline'}
+            size={18}
+            color={set.completed ? '#000000' : 'rgba(255,255,255,0.45)'}
+          />
+        </TouchableOpacity>
+      </View>
+      {showError && (
+        <Text style={setStyles.errorText}>Add weight and reps first</Text>
+      )}
     </View>
   );
 }
+
+// ─── Example PPL Templates ────────────────────────────────────────────────────
+
+const EXAMPLE_TEMPLATES = [
+  {
+    label: 'Push Day',
+    exercises: [
+      { name: 'Bench Press', sets: 4, reps: 8 },
+      { name: 'Overhead Press', sets: 3, reps: 8 },
+      { name: 'Incline Dumbbell Press', sets: 3, reps: 10 },
+      { name: 'Cable Lateral Raise', sets: 4, reps: 15 },
+      { name: 'Tricep Pushdown', sets: 3, reps: 12 },
+    ],
+  },
+  {
+    label: 'Pull Day',
+    exercises: [
+      { name: 'Barbell Row', sets: 4, reps: 8 },
+      { name: 'Pull-Up', sets: 4, reps: 8 },
+      { name: 'Lat Pulldown', sets: 3, reps: 10 },
+      { name: 'Face Pull', sets: 3, reps: 15 },
+      { name: 'Bicep Curl', sets: 3, reps: 12 },
+    ],
+  },
+  {
+    label: 'Leg Day',
+    exercises: [
+      { name: 'Barbell Back Squat', sets: 4, reps: 8 },
+      { name: 'Romanian Deadlift', sets: 4, reps: 8 },
+      { name: 'Leg Press', sets: 3, reps: 12 },
+      { name: 'Leg Curl', sets: 3, reps: 12 },
+      { name: 'Calf Raise', sets: 4, reps: 20 },
+    ],
+  },
+];
+
+const DAY_ABBR = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
 // ─── Idle Screen ─────────────────────────────────────────────────────────────
 
@@ -1344,7 +1788,11 @@ function IdleScreen({ onStart, sessions, templates, savedProgram, onLoadTemplate
         <View style={styles.section}>
           <Text style={styles.sectionLabel}>Routines</Text>
           {savedProgram ? (
-            savedProgram.program.sessions.map((s, i) => (
+            savedProgram.program.sessions.map((s, i) => {
+              const dayIdx = savedProgram.program.trainingDayIndices?.[i];
+              const dayLabel = dayIdx !== undefined ? DAY_ABBR[dayIdx] : null;
+              const routineTitle = dayLabel ? `${s.label} — ${dayLabel}` : s.label;
+              return (
               <TouchableOpacity
                 key={i}
                 style={styles.routineCard}
@@ -1360,7 +1808,7 @@ function IdleScreen({ onStart, sessions, templates, savedProgram, onLoadTemplate
                 activeOpacity={0.7}
               >
                 <View style={styles.routineLeft}>
-                  <Text style={styles.routineName}>{s.label}</Text>
+                  <Text style={styles.routineName}>{routineTitle}</Text>
                   <Text style={styles.routineMeta}>
                     {s.exercises.length} exercise{s.exercises.length !== 1 ? 's' : ''} · {s.exercises.map((e) => e.name).slice(0, 2).join(', ')}{s.exercises.length > 2 ? '…' : ''}
                   </Text>
@@ -1370,7 +1818,8 @@ function IdleScreen({ onStart, sessions, templates, savedProgram, onLoadTemplate
                   <Text style={styles.loadBtnText}>Start</Text>
                 </View>
               </TouchableOpacity>
-            ))
+              );
+            })
           ) : (
             <View style={styles.routineEmpty}>
               <Text style={styles.routineEmptyText}>
@@ -1415,6 +1864,7 @@ function IdleScreen({ onStart, sessions, templates, savedProgram, onLoadTemplate
             ))}
           </View>
         )}
+
 
         {lastSession && (
           <View style={styles.section}>
@@ -1523,26 +1973,33 @@ const styles = StyleSheet.create({
     color: COLORS.textMuted,
     lineHeight: 20,
   },
-  // Quick log hint row inside active session
-  quickLogHintRow: {
+  exampleCard: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: SPACING.xs,
-    paddingHorizontal: SPACING.xl,
-    paddingVertical: SPACING.sm,
-    backgroundColor: COLORS.accentDim,
-    borderTopWidth: 1,
-    borderTopColor: COLORS.accent + '30',
+    backgroundColor: COLORS.surface,
+    borderRadius: RADIUS.md,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    padding: SPACING.md,
+    gap: SPACING.sm,
   },
-  quickLogHintText: {
-    fontSize: FONT_SIZE.xs,
-    color: COLORS.accent,
-    fontWeight: '700',
-    flex: 1,
-  },
-  quickLogHintExample: {
-    fontSize: FONT_SIZE.xs,
+  exampleTag: {
+    fontSize: 9,
+    fontWeight: '900',
     color: COLORS.textMuted,
+    letterSpacing: 1.5,
+    textTransform: 'uppercase',
+    marginBottom: 2,
+  },
+  loadBtnOutline: {
+    backgroundColor: 'transparent',
+    borderWidth: 1,
+    borderColor: COLORS.accent,
+  },
+  loadBtnOutlineText: {
+    fontSize: FONT_SIZE.xs,
+    fontWeight: '800',
+    color: COLORS.accent,
   },
   section: { marginHorizontal: SPACING.xl, gap: SPACING.sm, marginBottom: SPACING.xl },
   sectionLabel: {
@@ -1608,17 +2065,6 @@ const styles = StyleSheet.create({
   lastExSuggestion: { fontSize: FONT_SIZE.xs, fontWeight: '700', color: COLORS.textSecondary },
   lastExSets: { fontSize: FONT_SIZE.sm, color: COLORS.textSecondary },
   // Session timer toggle in header
-  timerToggleBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-  },
-  sessionCountdown: {
-    fontSize: FONT_SIZE.md,
-    fontWeight: '900',
-    color: COLORS.accent,
-    fontVariant: ['tabular-nums'] as any,
-  },
   // Volume display
   volumeBar: {
     flexDirection: 'row',
@@ -1683,6 +2129,20 @@ const styles = StyleSheet.create({
   },
   discardText: { fontSize: FONT_SIZE.md, color: COLORS.danger, fontWeight: '600' },
   activeTitle: { fontSize: FONT_SIZE.md, fontWeight: '800', color: COLORS.text },
+  headerCenter: { alignItems: 'center', gap: 2 },
+  elapsedTimer: {
+    fontSize: 13,
+    color: '#888',
+    fontVariant: ['tabular-nums'] as any,
+  },
+  elapsedTimerWarning: {
+    color: '#e8ff00',
+  },
+  timerHint: {
+    fontSize: 10,
+    color: '#555',
+    textAlign: 'center',
+  },
   finishButton: {
     backgroundColor: COLORS.accent,
     paddingHorizontal: SPACING.lg,
@@ -1690,83 +2150,6 @@ const styles = StyleSheet.create({
     borderRadius: RADIUS.full,
   },
   finishButtonText: { fontSize: FONT_SIZE.sm, fontWeight: '800', color: COLORS.background },
-  // Rest timer
-  restTimerBanner: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: SPACING.lg,
-    paddingVertical: SPACING.sm,
-    backgroundColor: COLORS.accentDim,
-    borderBottomWidth: 1,
-    borderBottomColor: COLORS.accent + '40',
-    gap: SPACING.sm,
-  },
-  restTimerBannerUrgent: {
-    backgroundColor: 'rgba(255,136,0,0.12)',
-    borderBottomColor: COLORS.warning + '40',
-  },
-  restTimerLeft: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-  },
-  restTimerLabel: {
-    fontSize: FONT_SIZE.xs,
-    fontWeight: '800',
-    color: COLORS.accent,
-    letterSpacing: 2,
-  },
-  restTimerCount: {
-    fontSize: 32,
-    fontWeight: '900',
-    color: COLORS.accent,
-    fontVariant: ['tabular-nums'],
-    minWidth: 70,
-    textAlign: 'center',
-  },
-  restTimerRight: {
-    flex: 1,
-    gap: SPACING.xs,
-    alignItems: 'flex-end',
-  },
-  restProgressBar: {
-    width: '100%',
-    height: 4,
-    backgroundColor: COLORS.border,
-    borderRadius: RADIUS.full,
-    overflow: 'hidden',
-  },
-  restProgressFill: {
-    height: '100%',
-    borderRadius: RADIUS.full,
-  },
-  restSkipBtn: {
-    paddingHorizontal: SPACING.sm,
-    paddingVertical: 2,
-    borderRadius: RADIUS.sm,
-    borderWidth: 1,
-    borderColor: COLORS.border,
-  },
-  restSkipText: {
-    fontSize: FONT_SIZE.xs,
-    color: COLORS.textSecondary,
-    fontWeight: '600',
-  },
-  restReadyBanner: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: SPACING.sm,
-    paddingHorizontal: SPACING.lg,
-    paddingVertical: SPACING.sm,
-    backgroundColor: 'rgba(0,204,68,0.1)',
-    borderBottomWidth: 1,
-    borderBottomColor: 'rgba(0,204,68,0.2)',
-  },
-  restReadyText: {
-    fontSize: FONT_SIZE.sm,
-    fontWeight: '700',
-    color: COLORS.success,
-  },
   // Exercise card
   exerciseCard: {
     marginHorizontal: SPACING.lg,
@@ -1804,6 +2187,32 @@ const styles = StyleSheet.create({
     fontSize: 10,
     color: COLORS.textSecondary,
     fontWeight: '600',
+  },
+  perSideLabel: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: COLORS.accent,
+    letterSpacing: 0.5,
+  },
+  perSideToggle: {
+    paddingHorizontal: SPACING.sm,
+    paddingVertical: 3,
+    backgroundColor: COLORS.surfaceAlt,
+    borderRadius: RADIUS.xs,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+  },
+  perSideToggleActive: {
+    backgroundColor: COLORS.accentDim,
+    borderColor: COLORS.accent + '80',
+  },
+  perSideToggleText: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: COLORS.textMuted,
+  },
+  perSideToggleTextActive: {
+    color: COLORS.accent,
   },
   exerciseCardDragging: {
     borderColor: COLORS.accent,
@@ -1919,46 +2328,65 @@ const styles = StyleSheet.create({
     color: COLORS.text,
     fontWeight: '600',
   },
-  // Quick Log Bar
-  quickLogBar: {
+  // Floating quick log button
+  quickFab: {
+    position: 'absolute',
+    bottom: 16,
+    right: 20,
+    width: 52,
+    height: 52,
+    borderRadius: 26,
+    backgroundColor: COLORS.accent,
+    alignItems: 'center',
+    justifyContent: 'center',
+    zIndex: 50,
+    shadowColor: '#000',
+    shadowOpacity: 0.3,
+    shadowRadius: 6,
+    shadowOffset: { width: 0, height: 3 },
+    elevation: 8,
+  },
+  quickModalWrap: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.55)',
+    justifyContent: 'flex-end',
+  },
+  quickPanel: {
+    backgroundColor: COLORS.surface,
     borderTopWidth: 1,
     borderTopColor: COLORS.border,
-    backgroundColor: COLORS.surface,
-    paddingHorizontal: SPACING.sm,
-    paddingVertical: SPACING.sm,
-    flexDirection: 'row',
-    alignItems: 'center',
+    paddingHorizontal: SPACING.md,
+    paddingTop: SPACING.md,
+    paddingBottom: SPACING.xl,
     gap: SPACING.xs,
   },
-  quickLogInput: {
+  quickPanelRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: SPACING.sm,
+  },
+  quickPanelInput: {
     flex: 1,
     backgroundColor: COLORS.surfaceAlt,
     borderRadius: RADIUS.md,
     paddingHorizontal: SPACING.md,
     paddingVertical: SPACING.sm,
-    fontSize: FONT_SIZE.sm,
+    fontSize: FONT_SIZE.md,
     color: COLORS.text,
     fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
   },
-  quickLogSend: {
-    width: 40,
-    height: 40,
+  quickPanelSend: {
+    width: 44,
+    height: 44,
     backgroundColor: COLORS.accent,
     borderRadius: RADIUS.md,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  quickLogError: {
-    position: 'absolute',
-    bottom: 62,
-    left: SPACING.lg,
-    right: SPACING.lg,
+  quickPanelError: {
     fontSize: FONT_SIZE.xs,
     color: COLORS.danger,
-    backgroundColor: COLORS.surface,
-    paddingHorizontal: SPACING.sm,
-    paddingVertical: 3,
-    borderRadius: RADIUS.xs,
+    paddingHorizontal: SPACING.xs,
   },
   modalContainer: { flex: 1, backgroundColor: COLORS.background },
   modalHeader: {
@@ -2029,7 +2457,6 @@ const styles = StyleSheet.create({
 
 const setStyles = StyleSheet.create({
   row: { flexDirection: 'row', alignItems: 'center', paddingVertical: SPACING.sm, gap: SPACING.sm },
-  rowCompleted: { opacity: 0.55 },
   setNumWrap: { width: 28, alignItems: 'center', gap: 2 },
   setNum: { fontSize: FONT_SIZE.sm, fontWeight: '700', color: COLORS.textMuted, textAlign: 'center' },
   counterGroup: {
@@ -2050,9 +2477,25 @@ const setStyles = StyleSheet.create({
     width: 36, height: 36, borderRadius: RADIUS.sm,
     alignItems: 'center', justifyContent: 'center',
   },
-  doneBtnEmpty: { backgroundColor: '#2a2a2a' },
-  doneBtnReady: { backgroundColor: COLORS.accent },
-  doneBtnActive: { backgroundColor: COLORS.accent },
+  doneBtnEmpty: {
+    backgroundColor: 'transparent',
+    borderWidth: 1.5,
+    borderColor: 'rgba(255,255,255,0.25)',
+  },
+  doneBtnActive: {
+    backgroundColor: '#e8ff00',
+    borderWidth: 0,
+  },
+  counterGroupError: {
+    borderWidth: 1,
+    borderColor: COLORS.danger,
+  },
+  errorText: {
+    fontSize: FONT_SIZE.xs,
+    color: COLORS.danger,
+    paddingHorizontal: SPACING.sm,
+    paddingBottom: SPACING.xs,
+  },
 });
 
 const timerStyles = StyleSheet.create({
@@ -2100,29 +2543,45 @@ const timerStyles = StyleSheet.create({
     color: COLORS.textSecondary,
   },
   presetTextActive: { color: COLORS.accent },
-  customRow: {
+  stepperRow: {
     flexDirection: 'row',
-    gap: SPACING.sm,
     alignItems: 'center',
+    justifyContent: 'center',
+    gap: SPACING.xl,
   },
-  customInput: {
-    flex: 1,
-    backgroundColor: COLORS.surfaceAlt,
+  stepperBtn: {
+    width: 44,
+    height: 44,
     borderRadius: RADIUS.md,
     borderWidth: 1,
     borderColor: COLORS.border,
-    paddingHorizontal: SPACING.md,
-    paddingVertical: SPACING.sm,
-    fontSize: FONT_SIZE.md,
-    color: COLORS.text,
+    backgroundColor: COLORS.surfaceAlt,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
-  customBtn: {
+  stepperBtnText: {
+    fontSize: 22,
+    color: COLORS.text,
+    fontWeight: '300',
+    lineHeight: 26,
+  },
+  stepperValue: {
+    fontSize: FONT_SIZE.lg,
+    fontWeight: '700',
+    color: COLORS.text,
+    minWidth: 80,
+    textAlign: 'center',
+  },
+  confirmBtn: {
     backgroundColor: COLORS.accent,
     borderRadius: RADIUS.md,
-    paddingHorizontal: SPACING.lg,
-    paddingVertical: SPACING.sm,
+    paddingVertical: SPACING.md,
+    alignItems: 'center',
   },
-  customBtnText: {
+  confirmBtnDisabled: {
+    opacity: 0.4,
+  },
+  confirmBtnText: {
     fontSize: FONT_SIZE.md,
     fontWeight: '800',
     color: COLORS.background,
@@ -2140,6 +2599,151 @@ const timerStyles = StyleSheet.create({
   },
   stopBtnText: {
     fontSize: FONT_SIZE.md,
+    fontWeight: '700',
+    color: COLORS.danger,
+  },
+  restAdjustRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: SPACING.xl,
+  },
+  restAdjBtn: {
+    width: 72,
+    paddingVertical: SPACING.md,
+    borderRadius: RADIUS.md,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    backgroundColor: COLORS.surfaceAlt,
+    alignItems: 'center',
+  },
+  restAdjBtnText: {
+    fontSize: FONT_SIZE.md,
+    fontWeight: '700',
+    color: COLORS.text,
+  },
+  restDurationText: {
+    fontSize: 36,
+    fontWeight: '900',
+    color: COLORS.accent,
+    fontVariant: ['tabular-nums'] as any,
+    minWidth: 100,
+    textAlign: 'center',
+  },
+  saveRestBtn: {
+    backgroundColor: COLORS.accent,
+    borderRadius: RADIUS.md,
+    paddingVertical: SPACING.md,
+    alignItems: 'center',
+  },
+  saveRestBtnText: {
+    fontSize: FONT_SIZE.md,
+    fontWeight: '800',
+    color: COLORS.background,
+  },
+});
+
+const restStripStyles = StyleSheet.create({
+  collapsed: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#111',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderBottomWidth: 1,
+    borderBottomColor: '#181818',
+    gap: 12,
+  },
+  stripMid: {
+    flex: 1,
+    gap: 2,
+  },
+  stripTitle: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#ffffff',
+  },
+  stripHint: {
+    fontSize: 10,
+    color: '#333',
+  },
+  arrowUp: {
+    fontSize: 16,
+    color: '#333',
+  },
+  expandedPanel: {
+    backgroundColor: '#111',
+    borderBottomWidth: 1,
+    borderBottomColor: '#181818',
+    padding: 12,
+    gap: 10,
+  },
+  expandedHeaderRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+  },
+  recoveringText: {
+    fontSize: 9,
+    fontWeight: '700',
+    color: '#333',
+    letterSpacing: 1.5,
+    textTransform: 'uppercase',
+  },
+  expandedExName: {
+    fontSize: 14,
+    fontWeight: '800',
+    color: '#ffffff',
+    maxWidth: 180,
+  },
+  collapseText: {
+    fontSize: 12,
+    color: '#444',
+  },
+  expandedBody: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 16,
+  },
+  expandedRight: {
+    flex: 1,
+    alignItems: 'center',
+    gap: 8,
+  },
+  muscleLabel: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#888',
+    textTransform: 'uppercase',
+    letterSpacing: 1,
+  },
+  adjustBtn: {
+    paddingHorizontal: 16,
+    paddingVertical: 6,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#333',
+    backgroundColor: '#1a1a1a',
+    width: '100%',
+    alignItems: 'center',
+  },
+  adjustBtnText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#888',
+  },
+  skipBtn: {
+    paddingHorizontal: 16,
+    paddingVertical: 6,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: 'rgba(220,38,38,0.4)',
+    backgroundColor: 'rgba(220,38,38,0.08)',
+    width: '100%',
+    alignItems: 'center',
+  },
+  skipBtnText: {
+    fontSize: 12,
     fontWeight: '700',
     color: COLORS.danger,
   },

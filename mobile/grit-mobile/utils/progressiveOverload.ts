@@ -129,36 +129,21 @@ export function getMotivationalLine(streak: number, daysSinceLast: number): stri
 }
 
 const DAILY_QUOTES = [
-  "Stop waiting to feel ready. You won't.",
-  "The version of you that makes excuses and the version that doesn't — same amount of time in the day.",
-  "Comfort is the enemy of every goal you've ever set.",
-  "You don't rise to the level of your motivation. You fall to the level of your habits.",
-  "Nobody remembers the days you didn't train.",
-  "The work doesn't care how you feel about it.",
-  "Every time you skip, you're voting for the person you don't want to be.",
-  "Discipline is just doing the thing even when the reason to skip sounds reasonable.",
-  "Your competition trained today. Did you?",
-  "The hardest rep is the one where you almost talked yourself out of the gym.",
-  "You will never regret a session. You will always regret skipping one.",
-  "Motivation is a feeling. Showing up is a decision.",
-  "One day you'll wish you'd started sooner. Today is that day.",
-  "You don't need a perfect plan. You need to not quit.",
-  "The body keeps the score. So does the log.",
-  "Soreness is just your body confirming you did something.",
-  "There is no version of the body you want that doesn't involve this part.",
-  "Stop negotiating with yourself. You already know what to do.",
-  "The excuses you make today are the ceiling you set for tomorrow.",
-  "Small weights, consistent effort, over years — that's the whole secret.",
-  "You can be sore tomorrow or regret it forever. Pick one.",
-  "Hard is temporary. Skipping makes it permanent.",
-  "Nobody got strong by thinking about it.",
-  "Progress compounds. So does skipping.",
-  "Your future self has an opinion about what you do today.",
-  "The gym doesn't get easier. You get harder.",
-  "What you do when you don't feel like it is what defines the result.",
-  "Tired is not the same as broken. Train anyway.",
-  "A bad session beats no session every single time.",
-  "You already paid for the gym. The question is whether you're paying yourself back.",
+  "Missing one gym session won't hurt you. But the attitude that allows you to miss one session without guilt is going to hurt you.",
+  "The man who goes to the gym every single day regardless of how he feels will always beat the man who goes when he feels like it.",
+  "The gym is perhaps the cheapest possible hourly activity money can buy. And some people STILL don't go.",
+  "Your mind must be stronger than your feelings.",
+  "People who train every day don't want to train every day. They're not motivated. They're disciplined.",
+  "The temporary satisfaction of quitting is outweighed by the eternal suffering of being nobody.",
+  "You're going to have to work when you don't feel like working. That's how it's going to have to be.",
+  "Discipline is not a punishment. It's self-mastery.",
+  "Reject weakness in any form.",
+  "No one is coming to save you. Your life is 100% your responsibility.",
+  "You are your habits. Do you want to be a loser or a winner? Decide.",
+  "Don't compete. Dominate.",
+  "Every action you take is molding who you are as a person.",
+  "Do the impossible and you'll never doubt yourself ever again.",
+  "High-energy people win.",
 ];
 
 /** Returns a quote that's consistent within a calendar day but rotates daily. */
@@ -271,6 +256,19 @@ const EXERCISE_ALIASES: Record<string, string> = {
   shrug: 'Shrug',
   'arnold press': 'Arnold Press',
   arnold: 'Arnold Press',
+  bp: 'Bench Press',
+  sq: 'Barbell Back Squat',
+  press: 'Bench Press',
+  lunge: 'Lunge',
+  lunges: 'Lunge',
+  plank: 'Plank',
+  'chest fly': 'Cable Fly',
+  fly: 'Cable Fly',
+  flies: 'Cable Fly',
+  flyes: 'Cable Fly',
+  cable: 'Cable Row',
+  pullover: 'Cable Pullover',
+  dumbbell: 'Dumbbell Press',
 };
 
 export interface QuickLogResult {
@@ -347,10 +345,29 @@ function parseSingleEntry(
   }
 
   // 5. Find exercise (search original text for best alias match)
-  const exercise =
+  let exercise =
     findExerciseInText(lower) ??
     (fallbackExercise ? { name: fallbackExercise, key: '' } : null);
-  if (!exercise) return null;
+
+  // If no known exercise found, try to extract a name from the text (unknown = custom)
+  if (!exercise) {
+    const stripped = lower
+      .replace(/\b\d+(?:\.\d+)?\s*kg\b/gi, '')
+      .replace(/\b\d+\s*[x×]\s*\d+\b/gi, '')
+      .replace(/\b\d+\s*reps?\b/gi, '')
+      .replace(/\b\d+\s+sets?\b/gi, '')
+      .replace(/\bfor\b/gi, '')
+      .replace(/\bi\s+(did|do|have|hit)\b/gi, '')
+      .replace(/\b\d+\b/g, '')
+      .trim()
+      .replace(/\s+/g, ' ');
+    if (stripped.length >= 2) {
+      const capitalized = stripped.replace(/\b\w/g, (c) => c.toUpperCase());
+      exercise = { name: capitalized, key: stripped };
+    } else {
+      return null;
+    }
+  }
 
   // Remove exercise key from working text
   if (exercise.key) {
