@@ -14,8 +14,9 @@ import {
   Animated,
   Linking,
   PanResponder,
+  Image,
 } from 'react-native';
-import Svg, { Path, Circle, Rect as SvgRect, Ellipse } from 'react-native-svg';
+import Svg, { Path, Rect as SvgRect, Ellipse } from 'react-native-svg';
 import { useState, useCallback, useRef, useEffect } from 'react';
 import { useFocusEffect, router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
@@ -1324,10 +1325,11 @@ export default function WorkoutScreen() {
 
 function getMuscleGroup(
   name: string
-): 'chest' | 'back' | 'legs' | 'shoulders' | 'biceps' | 'triceps' | 'calves' | 'abs' | 'full' {
+): 'chest' | 'back' | 'legs' | 'glutes' | 'shoulders' | 'biceps' | 'triceps' | 'calves' | 'abs' | 'full' {
   const l = name.toLowerCase();
   if (/bench|chest|pec|incline dumbbell press|dumbbell chest|chest fly/.test(l)) return 'chest';
   if (/\brow\b|lat pull|pulldown|pull.?up|chin.?up|cable row|dumbbell row/.test(l)) return 'back';
+  if (/hip thrust|glute bridge|glute/.test(l)) return 'glutes';
   if (/squat|deadlift|leg press|romanian|bulgarian|hack squat|\blunge\b|leg curl|leg extension/.test(l)) return 'legs';
   if (/overhead press|lateral raise|front raise|rear delt|shoulder press/.test(l)) return 'shoulders';
   if (/bicep curl|hammer curl|preacher curl|concentration curl/.test(l)) return 'biceps';
@@ -1335,6 +1337,11 @@ function getMuscleGroup(
   if (/calf raise|calf/.test(l)) return 'calves';
   if (/plank|crunch|ab wheel|leg raise|russian twist|sit.?up/.test(l)) return 'abs';
   return 'full';
+}
+
+function isBackViewExercise(name: string): boolean {
+  const l = name.toLowerCase();
+  return /\brow\b|lat pull|pulldown|pull.?up|chin.?up|cable row|dumbbell row|romanian|hip thrust|glute bridge/.test(l);
 }
 
 function LiquidTimer({
@@ -1396,118 +1403,109 @@ function LiquidTimer({
   );
 }
 
-function BodySVG({ muscleGroup, progress }: { muscleGroup: string; progress: number }) {
+function BodySVG({ muscleGroup, progress, backView }: { muscleGroup: string; progress: number; backView: boolean }) {
   const alpha = 0.08 + progress * 0.42;
   const hl = `rgba(232,255,0,${alpha.toFixed(2)})`;
   const hlDim = `rgba(232,255,0,${(alpha * 0.6).toFixed(2)})`;
-  const bodyFill = '#1a1a1a';
-  const bodyStroke = '#2a2a2a';
+
+  // The full musculature.png has front figure on left half, back figure on right half.
+  // Display the image at 200px wide inside a 100px clipping container.
+  const imageLeft = backView ? -100 : 0;
 
   const highlights = (() => {
     switch (muscleGroup) {
       case 'chest':
         return (
           <>
-            <Ellipse cx={38} cy={46} rx={13} ry={10} fill={hl} />
-            <Ellipse cx={62} cy={46} rx={13} ry={10} fill={hl} />
+            <Ellipse cx={34} cy={44} rx={13} ry={9} fill={hl} />
+            <Ellipse cx={66} cy={44} rx={13} ry={9} fill={hl} />
           </>
         );
       case 'back':
+        // Lats on back view
         return (
           <>
-            <Path d="M 23,34 L 27,34 L 29,88 L 23,82 Z" fill={hl} />
-            <Path d="M 77,34 L 73,34 L 71,88 L 77,82 Z" fill={hl} />
-            <Path d="M 36,28 L 64,28 L 62,38 L 38,38 Z" fill={hlDim} />
+            <Ellipse cx={24} cy={58} rx={10} ry={22} fill={hl} />
+            <Ellipse cx={76} cy={58} rx={10} ry={22} fill={hl} />
+            <Ellipse cx={50} cy={36} rx={18} ry={9} fill={hlDim} />
+          </>
+        );
+      case 'glutes':
+        return (
+          <>
+            <Ellipse cx={32} cy={102} rx={14} ry={13} fill={hl} />
+            <Ellipse cx={68} cy={102} rx={14} ry={13} fill={hl} />
           </>
         );
       case 'shoulders':
         return (
           <>
-            <Ellipse cx={19} cy={38} rx={9} ry={8} fill={hl} />
-            <Ellipse cx={81} cy={38} rx={9} ry={8} fill={hl} />
+            <Ellipse cx={16} cy={40} rx={10} ry={9} fill={hl} />
+            <Ellipse cx={84} cy={40} rx={10} ry={9} fill={hl} />
           </>
         );
       case 'biceps':
         return (
           <>
-            <Ellipse cx={13} cy={60} rx={6} ry={12} fill={hl} />
-            <Ellipse cx={87} cy={60} rx={6} ry={12} fill={hl} />
+            <Ellipse cx={11} cy={62} rx={7} ry={13} fill={hl} />
+            <Ellipse cx={89} cy={62} rx={7} ry={13} fill={hl} />
           </>
         );
       case 'triceps':
+        // Back of arms, visible on back view but also shown on front for simplicity
         return (
           <>
-            <Ellipse cx={14} cy={62} rx={5} ry={12} fill={hl} />
-            <Ellipse cx={86} cy={62} rx={5} ry={12} fill={hl} />
+            <Ellipse cx={11} cy={64} rx={6} ry={13} fill={hl} />
+            <Ellipse cx={89} cy={64} rx={6} ry={13} fill={hl} />
           </>
         );
       case 'legs':
         return (
           <>
-            <Ellipse cx={28} cy={118} rx={9} ry={24} fill={hl} />
-            <Ellipse cx={72} cy={118} rx={9} ry={24} fill={hl} />
+            <Ellipse cx={30} cy={116} rx={12} ry={26} fill={hl} />
+            <Ellipse cx={70} cy={116} rx={12} ry={26} fill={hl} />
           </>
         );
       case 'calves':
         return (
           <>
-            <Ellipse cx={26} cy={152} rx={8} ry={8} fill={hl} />
-            <Ellipse cx={74} cy={152} rx={8} ry={8} fill={hl} />
+            <Ellipse cx={28} cy={150} rx={9} ry={10} fill={hl} />
+            <Ellipse cx={72} cy={150} rx={9} ry={10} fill={hl} />
           </>
         );
       case 'abs':
-        return <SvgRect x={34} y={40} width={32} height={50} rx={4} fill={hl} />;
+        return <SvgRect x={36} y={52} width={28} height={42} rx={4} fill={hl} />;
       default:
         return (
           <SvgRect
-            x={10}
+            x={8}
             y={0}
-            width={80}
+            width={84}
             height={160}
             rx={10}
-            fill={`rgba(232,255,0,${(alpha * 0.25).toFixed(2)})`}
+            fill={`rgba(232,255,0,${(alpha * 0.2).toFixed(2)})`}
           />
         );
     }
   })();
 
   return (
-    <Svg width={100} height={160} viewBox="0 0 100 160">
-      {/* Head */}
-      <Circle cx={50} cy={13} r={11} fill={bodyFill} stroke={bodyStroke} strokeWidth={1} />
-      {/* Neck */}
-      <Path d="M 45,23 L 55,23 L 55,32 L 45,32 Z" fill={bodyFill} stroke={bodyStroke} strokeWidth={0.5} />
-      {/* Torso */}
-      <Path d="M 23,30 Q 50,26 77,30 L 73,92 L 27,92 Z" fill={bodyFill} stroke={bodyStroke} strokeWidth={1} />
-      {/* Shoulder caps */}
-      <Ellipse cx={20} cy={36} rx={8} ry={7} fill={bodyFill} stroke={bodyStroke} strokeWidth={1} />
-      <Ellipse cx={80} cy={36} rx={8} ry={7} fill={bodyFill} stroke={bodyStroke} strokeWidth={1} />
-      {/* Left upper arm */}
-      <Path d="M 21,36 L 10,44 L 8,78 L 18,78 Z" fill={bodyFill} stroke={bodyStroke} strokeWidth={1} />
-      {/* Right upper arm */}
-      <Path d="M 79,36 L 90,44 L 92,78 L 82,78 Z" fill={bodyFill} stroke={bodyStroke} strokeWidth={1} />
-      {/* Left forearm */}
-      <Path d="M 8,78 L 4,78 L 1,112 L 10,112 Z" fill={bodyFill} stroke={bodyStroke} strokeWidth={1} />
-      {/* Right forearm */}
-      <Path d="M 92,78 L 96,78 L 99,112 L 90,112 Z" fill={bodyFill} stroke={bodyStroke} strokeWidth={1} />
-      {/* Left thigh */}
-      <Path d="M 27,92 L 20,92 L 16,148 L 38,148 Z" fill={bodyFill} stroke={bodyStroke} strokeWidth={1} />
-      {/* Right thigh */}
-      <Path d="M 73,92 L 80,92 L 84,148 L 62,148 Z" fill={bodyFill} stroke={bodyStroke} strokeWidth={1} />
-      {/* Left calf */}
-      <Path d="M 16,148 L 38,148 L 36,158 L 18,158 Z" fill={bodyFill} stroke={bodyStroke} strokeWidth={1} />
-      {/* Right calf */}
-      <Path d="M 62,148 L 84,148 L 82,158 L 64,158 Z" fill={bodyFill} stroke={bodyStroke} strokeWidth={1} />
-      {/* Ab lines */}
-      <Path d="M 34,58 L 66,58" stroke={bodyStroke} strokeWidth={1} fill="none" />
-      <Path d="M 34,70 L 66,70" stroke={bodyStroke} strokeWidth={1} fill="none" />
-      <Path d="M 50,38 L 50,90" stroke={bodyStroke} strokeWidth={0.5} fill="none" />
-      {/* Collarbone */}
-      <Path d="M 48,30 Q 38,32 26,36" stroke={bodyStroke} strokeWidth={1} fill="none" />
-      <Path d="M 52,30 Q 62,32 74,36" stroke={bodyStroke} strokeWidth={1} fill="none" />
-      {/* Muscle highlights */}
-      {highlights}
-    </Svg>
+    <View style={{ width: 100, height: 160, overflow: 'hidden', borderRadius: 8 }}>
+      {/* Anatomy photo — show front (left) or back (right) half */}
+      <Image
+        source={require('../../assets/images/musculature.png')}
+        style={{ width: 200, height: 160, position: 'absolute', left: imageLeft }}
+        resizeMode="stretch"
+      />
+      {/* Dark overlay for GRIT theme */}
+      <View style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.45)' }} />
+      {/* Subtle yellow-green tint */}
+      <View style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(232,255,0,0.05)' }} />
+      {/* SVG muscle highlight shapes */}
+      <Svg width={100} height={160} viewBox="0 0 100 160" style={{ position: 'absolute' }}>
+        {highlights}
+      </Svg>
+    </View>
   );
 }
 
@@ -1529,6 +1527,7 @@ function RestTimerStrip({
   const [expanded, setExpanded] = useState(false);
   const progress = total > 0 ? Math.max(0, Math.min(1, 1 - remaining / total)) : 0;
   const muscleGroup = getMuscleGroup(exerciseName ?? '');
+  const backView = isBackViewExercise(exerciseName ?? '');
   const muscleLabel =
     muscleGroup === 'full'
       ? 'Full body'
@@ -1556,7 +1555,7 @@ function RestTimerStrip({
           </TouchableOpacity>
         </View>
         <View style={restStripStyles.expandedBody}>
-          <BodySVG muscleGroup={muscleGroup} progress={progress} />
+          <BodySVG muscleGroup={muscleGroup} progress={progress} backView={backView} />
           <View style={restStripStyles.expandedRight}>
             <LiquidTimer size={90} progress={progress} remaining={remaining} complete={complete} />
             <Text style={restStripStyles.muscleLabel}>{muscleLabel}</Text>
