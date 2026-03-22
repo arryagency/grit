@@ -14,9 +14,7 @@ import {
   Animated,
   Linking,
   PanResponder,
-  Image,
 } from 'react-native';
-import Svg, { Path, Rect as SvgRect, Ellipse } from 'react-native-svg';
 import { useState, useCallback, useRef, useEffect } from 'react';
 import { useFocusEffect, router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
@@ -1323,25 +1321,19 @@ export default function WorkoutScreen() {
 
 // ─── New Rest Timer Components ───────────────────────────────────────────────
 
-function getMuscleGroup(
-  name: string
-): 'chest' | 'back' | 'legs' | 'glutes' | 'shoulders' | 'biceps' | 'triceps' | 'calves' | 'abs' | 'full' {
+function getMuscleGroup(name: string): string {
   const l = name.toLowerCase();
-  if (/bench|chest|pec|incline dumbbell press|dumbbell chest|chest fly/.test(l)) return 'chest';
-  if (/\brow\b|lat pull|pulldown|pull.?up|chin.?up|cable row|dumbbell row/.test(l)) return 'back';
-  if (/hip thrust|glute bridge|glute/.test(l)) return 'glutes';
-  if (/squat|deadlift|leg press|romanian|bulgarian|hack squat|\blunge\b|leg curl|leg extension/.test(l)) return 'legs';
-  if (/overhead press|lateral raise|front raise|rear delt|shoulder press/.test(l)) return 'shoulders';
-  if (/bicep curl|hammer curl|preacher curl|concentration curl/.test(l)) return 'biceps';
-  if (/tricep|skull crusher|overhead tricep|weighted dip/.test(l)) return 'triceps';
-  if (/calf raise|calf/.test(l)) return 'calves';
-  if (/plank|crunch|ab wheel|leg raise|russian twist|sit.?up/.test(l)) return 'abs';
-  return 'full';
-}
-
-function isBackViewExercise(name: string): boolean {
-  const l = name.toLowerCase();
-  return /\brow\b|lat pull|pulldown|pull.?up|chin.?up|cable row|dumbbell row|romanian|hip thrust|glute bridge/.test(l);
+  if (/bench|chest|pec|incline dumbbell press|dumbbell chest|chest fly|cable fly|push.?up/.test(l)) return 'Chest';
+  if (/\brow\b|lat pull|pulldown|pull.?up|chin.?up|cable row|seated cable row|dumbbell row|pendlay/.test(l)) return 'Back';
+  if (/hip thrust|glute bridge|glute/.test(l)) return 'Glutes';
+  if (/romanian|rdl|\bdeadlift\b/.test(l)) return 'Hamstrings';
+  if (/squat|leg press|hack squat|bulgarian|\blunge\b|leg extension/.test(l)) return 'Legs';
+  if (/overhead press|lateral raise|front raise|rear delt|shoulder press/.test(l)) return 'Shoulders';
+  if (/bicep curl|hammer curl|preacher curl|concentration curl/.test(l)) return 'Biceps';
+  if (/tricep|skull crusher|overhead tricep|weighted dip/.test(l)) return 'Triceps';
+  if (/calf raise|standing calf|seated calf|\bcalf\b/.test(l)) return 'Calves';
+  if (/plank|crunch|ab wheel|leg raise|russian twist|sit.?up/.test(l)) return 'Abs';
+  return 'Full Body';
 }
 
 function LiquidTimer({
@@ -1403,118 +1395,6 @@ function LiquidTimer({
   );
 }
 
-function BodySVG({ muscleGroup, progress, backView }: { muscleGroup: string; progress: number; backView: boolean }) {
-  // Alpha ramps from 0.15 → 0.70 as timer progresses
-  const alpha = 0.15 + progress * 0.55;
-  const hl = `rgba(232,255,0,${alpha.toFixed(2)})`;
-  const hlDim = `rgba(232,255,0,${(alpha * 0.55).toFixed(2)})`;
-
-  // Image is 1024×768. Displayed at height=160 → width=213 (aspect preserved).
-  // Each half = 107px. Front figure centred at ~x=53, back at ~x=160 in 213px image.
-  // Container is 100px wide with overflow:hidden — offset to show the correct half.
-  const IMG_W = 213;
-  const IMG_H = 160;
-  const imageLeft = backView ? -110 : 0;
-
-  const highlights = (() => {
-    switch (muscleGroup) {
-      case 'chest':
-        return (
-          <>
-            <Ellipse cx={33} cy={43} rx={14} ry={11} fill={hl} />
-            <Ellipse cx={67} cy={43} rx={14} ry={11} fill={hl} />
-          </>
-        );
-      case 'back':
-        return (
-          <>
-            {/* Lats */}
-            <Ellipse cx={22} cy={60} rx={12} ry={24} fill={hl} />
-            <Ellipse cx={78} cy={60} rx={12} ry={24} fill={hl} />
-            {/* Traps */}
-            <Ellipse cx={50} cy={35} rx={16} ry={9} fill={hlDim} />
-          </>
-        );
-      case 'glutes':
-        return (
-          <>
-            <Ellipse cx={32} cy={106} rx={15} ry={14} fill={hl} />
-            <Ellipse cx={68} cy={106} rx={15} ry={14} fill={hl} />
-          </>
-        );
-      case 'shoulders':
-        return (
-          <>
-            <Ellipse cx={14} cy={36} rx={12} ry={10} fill={hl} />
-            <Ellipse cx={86} cy={36} rx={12} ry={10} fill={hl} />
-          </>
-        );
-      case 'biceps':
-        return (
-          <>
-            <Ellipse cx={11} cy={60} rx={8} ry={16} fill={hl} />
-            <Ellipse cx={89} cy={60} rx={8} ry={16} fill={hl} />
-          </>
-        );
-      case 'triceps':
-        return (
-          <>
-            <Ellipse cx={10} cy={62} rx={7} ry={15} fill={hl} />
-            <Ellipse cx={90} cy={62} rx={7} ry={15} fill={hl} />
-          </>
-        );
-      case 'legs':
-        return (
-          <>
-            <Ellipse cx={30} cy={110} rx={13} ry={26} fill={hl} />
-            <Ellipse cx={70} cy={110} rx={13} ry={26} fill={hl} />
-          </>
-        );
-      case 'calves':
-        return (
-          <>
-            <Ellipse cx={28} cy={144} rx={10} ry={13} fill={hl} />
-            <Ellipse cx={72} cy={144} rx={10} ry={13} fill={hl} />
-          </>
-        );
-      case 'abs':
-        return (
-          <>
-            <SvgRect x={37} y={52} width={26} height={36} rx={5} fill={hl} />
-          </>
-        );
-      default:
-        return (
-          <SvgRect
-            x={5}
-            y={5}
-            width={90}
-            height={150}
-            rx={12}
-            fill={`rgba(232,255,0,${(alpha * 0.18).toFixed(2)})`}
-          />
-        );
-    }
-  })();
-
-  return (
-    <View style={{ width: 100, height: IMG_H, overflow: 'hidden', borderRadius: 10 }}>
-      {/* Anatomy photo — correct aspect ratio, crop to front or back half */}
-      <Image
-        source={require('../../assets/images/musculature.png')}
-        style={{ width: IMG_W, height: IMG_H, position: 'absolute', left: imageLeft }}
-        resizeMode="stretch"
-      />
-      {/* Light dark overlay — image already has black bg, just soften slightly */}
-      <View style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.15)' }} />
-      {/* SVG muscle highlight shapes */}
-      <Svg width={100} height={IMG_H} viewBox="0 0 100 160" style={{ position: 'absolute' }}>
-        {highlights}
-      </Svg>
-    </View>
-  );
-}
-
 function RestTimerStrip({
   remaining,
   total,
@@ -1532,14 +1412,8 @@ function RestTimerStrip({
 }) {
   const [expanded, setExpanded] = useState(false);
   const progress = total > 0 ? Math.max(0, Math.min(1, 1 - remaining / total)) : 0;
-  const muscleGroup = getMuscleGroup(exerciseName ?? '');
-  const backView = isBackViewExercise(exerciseName ?? '');
-  const muscleLabel =
-    muscleGroup === 'full'
-      ? 'Full body'
-      : muscleGroup.charAt(0).toUpperCase() + muscleGroup.slice(1);
+  const muscleLabel = getMuscleGroup(exerciseName ?? '');
 
-  // Auto-collapse when complete
   useEffect(() => {
     if (complete) setExpanded(false);
   }, [complete]);
@@ -1549,30 +1423,23 @@ function RestTimerStrip({
   if (expanded) {
     return (
       <View style={restStripStyles.expandedPanel}>
-        <View style={restStripStyles.expandedHeaderRow}>
-          <View>
-            <Text style={restStripStyles.recoveringText}>RECOVERING</Text>
-            <Text style={restStripStyles.expandedExName} numberOfLines={1}>
-              {exerciseName}
-            </Text>
-          </View>
-          <TouchableOpacity onPress={() => setExpanded(false)}>
-            <Text style={restStripStyles.collapseText}>↓ collapse</Text>
-          </TouchableOpacity>
-        </View>
+        <TouchableOpacity style={restStripStyles.collapseRow} onPress={() => setExpanded(false)}>
+          <Text style={restStripStyles.collapseText}>↓ collapse</Text>
+        </TouchableOpacity>
         <View style={restStripStyles.expandedBody}>
-          <BodySVG muscleGroup={muscleGroup} progress={progress} backView={backView} />
-          <View style={restStripStyles.expandedRight}>
-            <LiquidTimer size={90} progress={progress} remaining={remaining} complete={complete} />
-            <Text style={restStripStyles.muscleLabel}>{muscleLabel}</Text>
-            <TouchableOpacity style={restStripStyles.adjustBtn} onPress={onAdjust}>
-              <Text style={restStripStyles.adjustBtnText}>Adjust</Text>
+          <LiquidTimer size={90} progress={progress} remaining={remaining} complete={complete} />
+          <Text style={restStripStyles.muscleLabel}>
+            {muscleLabel.toUpperCase()} RECOVERING
+          </Text>
+          <View style={restStripStyles.expandedBtnRow}>
+            <TouchableOpacity style={restStripStyles.expandedBtn} onPress={onAdjust}>
+              <Text style={restStripStyles.expandedBtnText}>Adjust</Text>
             </TouchableOpacity>
             <TouchableOpacity
-              style={restStripStyles.skipBtn}
+              style={restStripStyles.expandedBtn}
               onPress={() => { onSkip(); setExpanded(false); }}
             >
-              <Text style={restStripStyles.skipBtnText}>Skip</Text>
+              <Text style={[restStripStyles.expandedBtnText, { color: '#e74c3c' }]}>Skip</Text>
             </TouchableOpacity>
           </View>
         </View>
@@ -1594,6 +1461,14 @@ function RestTimerStrip({
         {!complete && <Text style={restStripStyles.stripHint}>Tap to expand</Text>}
       </View>
       {!complete && <Text style={restStripStyles.arrowUp}>↑</Text>}
+      {!complete && (
+        <TouchableOpacity
+          onPress={onSkip}
+          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+        >
+          <Text style={restStripStyles.stripSkip}>Skip</Text>
+        </TouchableOpacity>
+      )}
     </TouchableOpacity>
   );
 }
@@ -2680,77 +2555,49 @@ const restStripStyles = StyleSheet.create({
     backgroundColor: '#111',
     borderBottomWidth: 1,
     borderBottomColor: '#181818',
-    padding: 12,
-    gap: 10,
+    paddingHorizontal: 16,
+    paddingTop: 10,
+    paddingBottom: 16,
+    alignItems: 'center',
+    gap: 14,
   },
-  expandedHeaderRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'flex-start',
-  },
-  recoveringText: {
-    fontSize: 9,
-    fontWeight: '700',
-    color: '#333',
-    letterSpacing: 1.5,
-    textTransform: 'uppercase',
-  },
-  expandedExName: {
-    fontSize: 14,
-    fontWeight: '800',
-    color: '#ffffff',
-    maxWidth: 180,
+  collapseRow: {
+    alignSelf: 'flex-end',
   },
   collapseText: {
     fontSize: 12,
     color: '#444',
   },
   expandedBody: {
-    flexDirection: 'row',
     alignItems: 'center',
-    gap: 16,
-  },
-  expandedRight: {
-    flex: 1,
-    alignItems: 'center',
-    gap: 8,
+    gap: 12,
   },
   muscleLabel: {
     fontSize: 11,
     fontWeight: '700',
     color: '#888',
-    textTransform: 'uppercase',
-    letterSpacing: 1,
+    letterSpacing: 1.5,
   },
-  adjustBtn: {
-    paddingHorizontal: 16,
-    paddingVertical: 6,
-    borderRadius: 8,
+  stripSkip: {
+    fontSize: 11,
+    color: '#666',
+  },
+  expandedBtnRow: {
+    flexDirection: 'row',
+    gap: 10,
+  },
+  expandedBtn: {
+    paddingHorizontal: 20,
+    paddingVertical: 8,
+    borderRadius: 20,
     borderWidth: 1,
     borderColor: '#333',
     backgroundColor: '#1a1a1a',
-    width: '100%',
-    alignItems: 'center',
   },
-  adjustBtnText: {
+  expandedBtnText: {
     fontSize: 12,
-    fontWeight: '700',
-    color: '#888',
-  },
-  skipBtn: {
-    paddingHorizontal: 16,
-    paddingVertical: 6,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: 'rgba(220,38,38,0.4)',
-    backgroundColor: 'rgba(220,38,38,0.08)',
-    width: '100%',
-    alignItems: 'center',
-  },
-  skipBtnText: {
-    fontSize: 12,
-    fontWeight: '700',
-    color: COLORS.danger,
+    fontWeight: '600',
+    color: '#ffffff',
   },
 });
 
